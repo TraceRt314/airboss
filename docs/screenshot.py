@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Render torre in a hidden tmux and export the screen as SVG (docs/screenshot.svg).
-Usage: docs/screenshot.py out.svg [cols rows]"""
+Usage: docs/screenshot.py out.svg [cols rows [torre-tui flags...]]"""
 import re, subprocess, sys, time, html, os
 out = sys.argv[1] if len(sys.argv) > 1 else "docs/screenshot.svg"
 cols, rows = (int(sys.argv[2]), int(sys.argv[3])) if len(sys.argv) > 3 else (132, 30)
+extra = sys.argv[4:]  # flags for torre-tui, e.g. -lang en -theme nord
 tui = os.path.expanduser("~/.local/bin/torre-tui")
 subprocess.run(["tmux", "kill-session", "-t", "torre-shot"], stderr=subprocess.DEVNULL)
-subprocess.run(["tmux", "new-session", "-d", "-s", "torre-shot", "-x", str(cols), "-y", str(rows), tui], check=True)
+subprocess.run(["tmux", "new-session", "-d", "-s", "torre-shot", "-x", str(cols), "-y", str(rows), " ".join([tui] + extra)], check=True)
 time.sleep(8)
 raw = subprocess.run(["tmux", "capture-pane", "-p", "-e", "-t", "torre-shot"], capture_output=True, text=True).stdout
 subprocess.run(["tmux", "kill-session", "-t", "torre-shot"])

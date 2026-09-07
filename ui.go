@@ -768,10 +768,17 @@ func (m model) View() string {
 
 	// ── pie ──
 	hint := func(k, t string) string { return key.Render(" "+k+" ") + dim.Render(" "+t) }
-	foot := " " + strings.Join([]string{
+	// tantas pistas como quepan (trunc por runas cortaría dentro de las secuencias ANSI)
+	foot := " "
+	for _, h := range []string{
 		hint("↵", T("k_go")), hint("a", T("k_attach")), hint("n", T("k_new")), hint("r", T("k_rename")), hint("t", T("k_type")),
 		hint("x", T("k_archive")), hint("d", T("k_done")), hint("/", T("k_filter")), hint("?", T("k_help")), hint("q", T("k_quit")),
-	}, "  ")
+	} {
+		if lipgloss.Width(foot)+lipgloss.Width(h)+2 > w {
+			break
+		}
+		foot += h + "  "
+	}
 	switch m.mode {
 	case "filter":
 		foot = " " + key.Render(" / ") + " " + fg.Render(m.input) + acc.Render("▏") + dim.Render("   "+T("filter_hint"))
@@ -783,7 +790,7 @@ func (m model) View() string {
 	if m.status != "" && m.mode == "" {
 		foot = " " + lipgloss.NewStyle().Foreground(c("yellow")).Render(trunc(m.status, w-3))
 	}
-	b.WriteString(trunc(foot, w))
+	b.WriteString(foot)
 	return b.String()
 }
 
