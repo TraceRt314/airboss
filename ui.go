@@ -119,6 +119,9 @@ func spin() tea.Cmd {
 func syncBin() string { return filepath.Join(os.Getenv("HOME"), ".local/bin/agent-board-sync") }
 
 func syncCmd() tea.Cmd {
+	if os.Getenv("TORRE_NO_SYNC") != "" { // demos y capturas: solo las fichas del directorio
+		return func() tea.Msg { return syncMsg{} }
+	}
 	return func() tea.Msg { return syncMsg{err: exec.Command(syncBin()).Run()} }
 }
 

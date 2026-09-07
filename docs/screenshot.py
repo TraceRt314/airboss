@@ -6,11 +6,16 @@ out = sys.argv[1] if len(sys.argv) > 1 else "docs/screenshot.svg"
 cols, rows = (int(sys.argv[2]), int(sys.argv[3])) if len(sys.argv) > 3 else (132, 30)
 extra = sys.argv[4:]  # flags for torre-tui, e.g. -lang en -theme nord
 tui = os.path.expanduser("~/.local/bin/torre-tui")
+here = os.path.dirname(os.path.abspath(__file__))
+# fictional sessions from docs/demo so the screenshot never leaks real prompts
+env = dict(os.environ, AGENT_BOARD_DIR=os.path.join(here, "demo"), TORRE_NO_SYNC="1")
 subprocess.run(["tmux", "kill-session", "-t", "torre-shot"], stderr=subprocess.DEVNULL)
-subprocess.run(["tmux", "new-session", "-d", "-s", "torre-shot", "-x", str(cols), "-y", str(rows), " ".join([tui] + extra)], check=True)
+subprocess.run(["tmux", "new-session", "-d", "-s", "torre-shot", "-x", str(cols), "-y", str(rows), " ".join([tui] + extra)], check=True, env=env)
 time.sleep(8)
 raw = subprocess.run(["tmux", "capture-pane", "-p", "-e", "-t", "torre-shot"], capture_output=True, text=True).stdout
 subprocess.run(["tmux", "kill-session", "-t", "torre-shot"])
+# the demo cards borrow a real pid so a window resolves; hide that window's real title
+raw = re.sub(r"(ws \S+ · \S+ · )[^\x1b]*?(?=\s{2,}|\x1b)", r"\1✳ nebula-api/fix: rate limit behind proxy", raw)
 bg = subprocess.run([tui, "color", "background"], capture_output=True, text=True).stdout.strip() or "#1e1e2e"
 fg0 = subprocess.run([tui, "color", "foreground"], capture_output=True, text=True).stdout.strip() or "#cdd6f4"
 CW, CH, PAD = 8.4, 19, 18
