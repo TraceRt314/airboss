@@ -15,7 +15,7 @@ One TUI that shows every Claude Code and Codex CLI session on your machine, grou
 
 You open a terminal per task, hand each one to an agent, and then you are alt-tabbing through eight windows to find out which agent finished, which one is stuck on a permission prompt, and which one has been idle for an hour. `airboss` answers that from a single window:
 
-- **State per session**, fed by the agents' own hooks: `working`, `waiting` (permission or question), `idle`, `error`, `done`. Codex sessions started before hooks existed are picked up from their rollout files.
+- **State per session**, fed by the agents' own hooks: `working`, `waiting` (permission, question, or a turn that ended and nobody came back within 60 s), `idle`, `error`, `done`. Codex sessions started before hooks existed are picked up from their rollout files.
 - **Grouped by project and typed by task** (`impl`, `plan`, `fix`, `review`, `ops`, `doc`). Titles follow the convention `project/type: description`; a background classifier names untitled sessions for you.
 - **Enter goes to the terminal.** airboss finds the compositor window that owns the agent process (walking `/proc` ancestors, tmux clients or window titles) and focuses it on Hyprland or Sway, then selects the tmux window and pane.
 - **Desktop notifications** when an agent waits for you, errors or finishes a turn, for both CLIs, through one script.

@@ -25,9 +25,9 @@ FMT='^([a-zA-Z0-9_.-]+)/(impl|plan|fix|review|ops|doc): *(.+)$'
 #    (or $LANG) says es ────────────────────────────────────────────────────
 _lang="${AIRBOSS_LANG:-${LANG%%[_.]*}}"
 if [[ "$_lang" == "es" ]]; then
-  MSG_WAITING="Te espera."; MSG_ERROR="Error: "; MSG_TURN_DONE="Turno completado"; MSG_DONE_SUFFIX="terminó"; MSG_SESSION_CLOSED="Sesión cerrada"
+  MSG_WAITING="Te espera."; MSG_ERROR="Error: "; MSG_TURN_DONE="Turno completado"; MSG_DONE_SUFFIX="terminó"; MSG_SESSION_CLOSED="Sesión cerrada"; MSG_YOUR_TURN="tu turno"
 else
-  MSG_WAITING="Waiting on you."; MSG_ERROR="Error: "; MSG_TURN_DONE="Turn done"; MSG_DONE_SUFFIX="done"; MSG_SESSION_CLOSED="Session closed"
+  MSG_WAITING="Waiting on you."; MSG_ERROR="Error: "; MSG_TURN_DONE="Turn done"; MSG_DONE_SUFFIX="done"; MSG_SESSION_CLOSED="Session closed"; MSG_YOUR_TURN="your turn"
 fi
 
 # ── apply title to Claude: session file (claude agents) + transcript (/resume) ─
@@ -185,7 +185,7 @@ case "$event" in
                      case "$nt" in
                        permission_prompt)  state="waiting"; [[ -z "$waiting_for" ]] && waiting_for="permission: $(trunc "$(j '.message')" 100)" ;;
                        agent_needs_input)  state="waiting"; waiting_for="question: $(trunc "$(j '.message')" 100)" ;;
-                       idle_prompt)        state="idle";    waiting_for="" ;;
+                       idle_prompt)        state="waiting"; waiting_for="$MSG_YOUR_TURN: $(trunc "${last:-$MSG_TURN_DONE}" 100)" ;; # 60 s without input after a turn ended
                        agent_completed)    state="done";    waiting_for="" ;;
                        *) exit 0 ;;
                      esac ;;
