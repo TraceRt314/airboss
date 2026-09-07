@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# agent-board-sync — reconcilia el estado de la Torre de Control con la realidad:
+#   - Claude: `claude agents --json` es la fuente autoritativa de estado, nombre y pid;
+#     crea fichas para sesiones abiertas antes de que existieran los hooks.
+#   - Codex: localiza el pid por cwd de los procesos `codex` vivos.
+#   - Marca `done` las sesiones cuyo proceso ya no existe.
+# Lo ejecuta un timer systemd --user cada 5 s y la propia TUI.
+set -u
+export LC_ALL=C.UTF-8
+STATE_DIR="${AGENT_BOARD_DIR:-$HOME/.local/state/agent-board}"
+SESS_DIR="$STATE_DIR/sessions"
+mkdir -p "$SESS_DIR"
+# un solo sync a la vez: el timer y la TUI pueden coincidir y pisarse los ficheros
+exec 8>"$STATE_DIR/sync.lock"; flock -n 8 || exit 0
+TMP=".tmp.$$"
+now=$(date +%s)
+CLAUDE_BIN=$(command -v claude 2>/dev/null || ls -1 "$HOME"/.local/share/mise/installs/claude/*/claude 2>/dev/null | tail -1)
+
+agents='[]'
+if [[ -n "${CLAUDE_BIN:-}" ]]; then
+  agents=$(timeout 5 "$CLAUDE_BIN" agents --json 2>/dev/null) || agents='[]'
+  jq -e 'type=="array"' >/dev/null 2>&1 <<<"$agents" || agents='[]'
+fi
+
+# pid → target tmux (#S:#I.#P) para procesos que viven en un pane
+declare -A PANE_OF
+if tmux info >/dev/null 2>&1; then
+  while IFS=$'\t' read -r ppid target; do PANE_OF[$ppid]="$target"; done < <(tmux list-panes -a -F $'#{pane_pid}\t#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null)
+fi
+pane_for_pid() { # sube por los padres hasta dar con el pid del pane
+  local p="$1" i
+  for i in 1 2 3 4 5 6; do
+    [[ -z "$p" || "$p" == 1 ]] && break
+    [[ -n "${PANE_OF[$p]:-}" ]] && { printf '%s' "${PANE_OF[$p]}"; return; }
+    p=$(awk '{print $4}' "/proc/$p/stat" 2>/dev/null)
+  done
+}
+
+# ── Claude: sesiones vivas según el propio CLI ─────────────────────────────
+while IFS= read -r row; do
+  [[ -z "$row" ]] && continue
+  sid=$(jq -r '.sessionId // empty' <<<"$row"); [[ -z "$sid" ]] && continue
+  pid=$(jq -r '.pid // empty' <<<"$row"); st=$(jq -r '.status // empty' <<<"$row")
+  name=$(jq -r '.name // empty' <<<"$row"); cwd=$(jq -r '.cwd // empty' <<<"$row"); kind=$(jq -r '.kind // "interactive"' <<<"$row")
+  # sesiones internas de plugins (observer de claude-mem) no son tuyas: fuera
+  [[ "$cwd" == *"/.claude-mem/"* ]] && continue
+  case "$st" in busy) state=working ;; waiting) state=waiting ;; idle) state=idle ;; *) state="" ;; esac
+  file="$SESS_DIR/claude-$sid.json"
+  if [[ -f "$file" ]]; then
+    old=$(cat "$file")
+  else
+    # sesión anterior a los hooks: ficha mínima
+    if [[ "$cwd" == "$HOME" ]]; then project="home"; else root=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null); project=$(basename "${root:-$cwd}"); fi
+    type="impl"; tsrc="auto"
+    [[ "$name" =~ ^[a-zA-Z0-9_.-]+/(impl|plan|fix|review|ops|doc)(:|[[:space:]]|$) ]] && { type="${BASH_REMATCH[1]}"; tsrc="name"; }
+    old=$(jq -n --arg sid "$sid" --arg name "$name" --arg project "$project" --arg cwd "$cwd" --arg type "$type" --arg tsrc "$tsrc" --argjson now "$now" \
+      '{agent:"claude", session_id:$sid, name:$name, project:$project, cwd:$cwd, type:$type, type_source:$tsrc, goal:"", last_message:"", subagents:0, turns:0, started:$now, source:"sync"}')
+  fi
+  target=""; [[ -n "$pid" ]] && target=$(pane_for_pid "$pid")
+  hook_state=$(jq -r '.state // empty' <<<"$old"); hook_wf=$(jq -r '.waiting_for // empty' <<<"$old")
+  # el hook es más preciso cuando dice "waiting" y el CLI aún no lo refleja; en lo demás manda el CLI
+  final="$state"; wf="$hook_wf"
+  [[ -z "$final" ]] && final="${hook_state:-idle}"
+  [[ "$hook_state" == "waiting" && "$state" == "busy" ]] && final="waiting"
+  [[ "$final" != "waiting" ]] && wf=""
+  jq --arg name "$name" --arg st "$final" --arg wf "$wf" --arg kind "$kind" --arg tt "$target" --argjson pid "${pid:-null}" --argjson now "$now" \
+     '.name = (if $name != "" then $name else .name end) | .state=$st | .waiting_for=(if $wf=="" then null else $wf end)
+      | .kind=$kind | .pid=$pid | .tmux_target=(if $tt != "" then $tt else .tmux_target end) | .synced=$now' <<<"$old" > "$file$TMP" && mv "$file$TMP" "$file"
+done < <(jq -c '.[]' <<<"$agents" 2>/dev/null)
+
+# ── fichas sin título (creadas por sync): objetivo desde el transcript y título ──
+for f in "$SESS_DIR"/claude-*.json; do
+  [[ -f "$f" ]] || continue
+  if [[ "$(jq -r '.bootstrapped // 0' "$f")" != "1" && "$(jq -r '.title // empty' "$f")" == "" ]]; then
+    "$HOME/.local/bin/agent-event" bootstrap "$f"
+  fi
+done
+
+# ── Codex: pid por cwd de procesos vivos ───────────────────────────────────
+declare -A CODEX_PID_BY_CWD
+while read -r cpid; do
+  c=$(readlink -f "/proc/$cpid/cwd" 2>/dev/null); [[ -n "$c" ]] && CODEX_PID_BY_CWD[$c]="$cpid"
+done < <(pgrep -x codex 2>/dev/null)
+
+# ── Codex: fichas para procesos vivos sin ficha (sesiones anteriores a hooks.json,
+#    que nunca disparan hooks). El rollout abierto en /proc/<pid>/fd da el id. ──
+while read -r cpid; do
+  roll=$(ls -l "/proc/$cpid/fd" 2>/dev/null | grep -o '[^ ]*/\.codex/sessions/[^ ]*rollout-[^ ]*\.jsonl' | head -1)
+  [[ -z "$roll" ]] && continue
+  sid=$(basename "$roll" .jsonl); sid="${sid: -36}"
+  file="$SESS_DIR/codex-$sid.json"
+  if ! jq -e . "$file" >/dev/null 2>&1; then
+    cwd=$(readlink -f "/proc/$cpid/cwd" 2>/dev/null)
+    name=$(jq -r --arg s "$sid" 'select(.id==$s) | .thread_name // empty' "$HOME/.codex/session_index.jsonl" 2>/dev/null | tail -1)
+    if [[ "$cwd" == "$HOME" ]]; then project="home"; else root=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null); project=$(basename "${root:-$cwd}"); fi
+    type="impl"; tsrc="auto"; title=""; title_src=""
+    if [[ "$name" =~ ^([a-zA-Z0-9_.-]+)/(impl|plan|fix|review|ops|doc):\ *(.+)$ ]]; then
+      project="${BASH_REMATCH[1]}"; type="${BASH_REMATCH[2]}"; tsrc="name"; title="$name"; title_src="name"
+    elif [[ "$name" =~ ^([a-zA-Z0-9_.-]+)/(.+)$ ]]; then
+      project="${BASH_REMATCH[1]}"; title="$project/$type: ${BASH_REMATCH[2]}"; title_src="user"
+    elif [[ -n "$name" ]]; then
+      title="$project/$type: $name"; title_src="user"
+    fi
+    goal=$(grep -m5 '"role":"user"' "$roll" 2>/dev/null | jq -r '(.payload.content // []) | map(select(.type=="input_text" or .type=="text") | .text) | join(" ")' 2>/dev/null \
+      | sed 's/^[[:space:]]*//' | grep -v -E '^(<|$)' | head -1 | tr -s '[:space:]' ' ' | cut -c1-240)
+    started=$(stat -c %W "$roll" 2>/dev/null); [[ -z "$started" || "$started" == 0 ]] && started=$(stat -c %Y "$roll")
+    jq -n --arg sid "$sid" --arg name "$name" --arg title "$title" --arg tsrc "$title_src" --arg project "$project" --arg cwd "$cwd" \
+       --arg type "$type" --arg tysrc "$tsrc" --arg goal "$goal" --arg tp "$roll" --argjson pid "$cpid" --argjson started "$started" \
+      '{agent:"codex", session_id:$sid, name:$name, title:$title, title_source:$tsrc, project:$project, cwd:$cwd, type:$type, type_source:$tysrc,
+        goal:$goal, last_message:"", transcript_path:$tp, subagents:0, turns:0, started:$started, state:"idle", kind:"interactive", pid:$pid,
+        source:"sync", hookless:1, bootstrapped:1}' > "$file$TMP" && mv "$file$TMP" "$file"
+  fi
+  # estado por el rollout, como `claude agents` para Claude: un turno abierto
+  # (último task_started sin task_complete) es "working" aunque lleve minutos sin
+  # escribir; "waiting" lo pone el hook de permiso y se respeta mientras dure el turno.
+  # Lectura incremental: solo lo añadido desde la última pasada (el rollout crece
+  # cientos de MB en sesiones largas); la primera vez se recorre entero.
+  size=$(stat -c %s "$roll" 2>/dev/null || echo 0)
+  read -r off lastev cur < <(jq -r '"\(.roll_off // 0) \(.roll_last // "-") \(.state // "-")"' "$file")
+  (( off > size )) && off=0
+  if (( size > off )); then
+    ev=$(tail -c +$((off+1)) "$roll" 2>/dev/null | grep -o '"type":"task_\(started\|complete\)"' | tail -1)
+    [[ -n "$ev" ]] && lastev="$ev"
+  fi
+  st=idle; [[ "$lastev" == *task_started* ]] && st=working
+  [[ "$cur" == "waiting" && "$st" == "working" ]] && st=waiting
+  mt=$(stat -c %Y "$roll" 2>/dev/null || echo 0)
+  jq --arg st "$st" --arg le "$lastev" --argjson off "$size" --argjson mt "$mt" --argjson pid "$cpid" --argjson now "$now" \
+     '.state=$st | .waiting_for=(if $st=="waiting" then .waiting_for else null end) | .updated=$mt | .pid=$pid | .synced=$now
+      | .roll_off=$off | .roll_last=$le' "$file" > "$file$TMP" && mv "$file$TMP" "$file"
+done < <(pgrep -x codex 2>/dev/null)
+
+# ── Sesiones cuyo proceso ya no existe → done ─────────────────────────────
+live_ids=$(jq -r '.[].sessionId' <<<"$agents" 2>/dev/null)
+for f in "$SESS_DIR"/*.json; do
+  [[ -f "$f" ]] && jq -e . "$f" >/dev/null 2>&1 || continue
+  agent=$(jq -r '.agent' "$f"); sid=$(jq -r '.session_id' "$f"); st=$(jq -r '.state // ""' "$f")
+  [[ "$st" == "done" ]] && continue
+  if [[ "$agent" == "claude" ]]; then
+    grep -qx -- "$sid" <<<"$live_ids" && continue
+    upd=$(jq -r '.updated // .started // 0' "$f")
+    # margen de 20 s: una sesión recién creada por hook puede no estar aún en la lista
+    (( now - upd < 20 )) && continue
+    jq --argjson now "$now" '.state="done" | .waiting_for=null | .synced=$now' "$f" > "$f$TMP" && mv "$f$TMP" "$f"
+  else
+    cwd=$(jq -r '.cwd // "-"' "$f"); [[ -z "$cwd" ]] && cwd="-"; pid="${CODEX_PID_BY_CWD[$cwd]:-}"
+    if [[ -n "$pid" ]]; then
+      target=$(pane_for_pid "$pid")
+      jq --argjson pid "$pid" --arg tt "$target" --argjson now "$now" '.pid=$pid | .tmux_target=(if $tt != "" then $tt else .tmux_target end) | .synced=$now' "$f" > "$f$TMP" && mv "$f$TMP" "$f"
+    else
+      upd=$(jq -r '.updated // .started // 0' "$f")
+      (( now - upd < 20 )) && continue
+      jq --argjson now "$now" '.state="done" | .waiting_for=null | .synced=$now' "$f" > "$f$TMP" && mv "$f$TMP" "$f"
+    fi
+  fi
+done
+
+# ── Resumen para starship / tmux ───────────────────────────────────────────
+jq -s '{total: (map(select(.state!="done"))|length), waiting: (map(select(.state=="waiting"))|length),
+        working: (map(select(.state=="working"))|length), ts: now|floor}' "$SESS_DIR"/*.json 2>/dev/null > "$STATE_DIR/summary.json.tmp" \
+  && mv "$STATE_DIR/summary.json.tmp" "$STATE_DIR/summary.json"
+exit 0

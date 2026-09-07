@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# tmux status segment: active torre sessions.
+#   󱚣 3            → 3 active sessions
+#   󱚣 3 · 1 wait   → one is waiting for you (red)
+S="${AGENT_BOARD_DIR:-$HOME/.local/state/agent-board}/summary.json"
+[[ -f "$S" ]] || exit 0
+read -r total waiting < <(jq -r '"\(.total // 0) \(.waiting // 0)"' "$S" 2>/dev/null)
+[[ "${total:-0}" -eq 0 ]] && exit 0
+acc=$("$HOME/.local/bin/torre-tui" color accent 2>/dev/null); red=$("$HOME/.local/bin/torre-tui" color red 2>/dev/null)
+icon="${TORRE_TMUX_ICON:-󱚣}"
+if [[ "${waiting:-0}" -gt 0 ]]; then
+  printf '#[fg=%s,bold]%s %s · %s wait#[default]' "${red:-red}" "$icon" "$total" "$waiting"
+else
+  printf '#[fg=%s]%s %s#[default]' "${acc:-blue}" "$icon" "$total"
+fi

@@ -1,0 +1,7 @@
+# Append to ~/.codex/config.toml (Codex CLI ≥ 0.150). The `notify` hook fires at
+# the end of every turn even on Codex versions without hooks.json support.
+notify = ["/absolute/path/to/.local/bin/agent-event", "codex-notify"]
+
+[tui]
+notifications = ["approval-requested"]
+notification_condition = "always"

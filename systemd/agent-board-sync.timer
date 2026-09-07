@@ -1,0 +1,10 @@
+[Unit]
+Description=Torre de Control: sync cada 5 s
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=5s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

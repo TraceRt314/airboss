@@ -1,0 +1,7 @@
+[Unit]
+Description=Torre de Control: reconcilia el estado de las sesiones de Claude/Codex
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/agent-board-sync
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin

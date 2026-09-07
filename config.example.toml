@@ -1,0 +1,57 @@
+# torre — ~/.config/torre/config.toml
+# Everything is optional. Without this file torre follows the active Omarchy
+# theme (if present), falls back to catppuccin-mocha, and uses Nerd Font icons.
+
+[theme]
+source = "auto"            # auto (Omarchy if present, else builtin) | omarchy | builtin
+name = "catppuccin-mocha"  # builtin: catppuccin-mocha, catppuccin-latte, tokyo-night,
+                           #   gruvbox-dark, nord, dracula, rose-pine, everforest, kanagawa
+# [theme.colors]           # override any palette key (hex)
+# accent = "#ff79c6"
+# lighter_background = "#2a2b3d"
+
+[icons]
+set = "nerd"               # nerd (Nerd Font v3) | unicode | ascii
+# [icons.override]         # any icon key (Nerd Font escapes: "\uF0F3"); see README "Icons"
+# claude = "\U000F06A9"
+# codex = "\uE7A8"
+# waiting = "\U000F009A"
+# app = "\uF0F7"
+
+[ui]
+title = "TORRE DE CONTROL"
+lang = "es"                # es | en (default: from $LANG)
+show_goal = true           # second line per session with the goal and the window
+details = true             # detail box under the list
+detail_lines = 5
+border = "rounded"         # rounded | square | none
+tick_seconds = 2           # how often cards are re-read
+name_width = 44
+spinner = "braille"        # braille | dots | line | none
+# state_dir = "~/.local/state/agent-board"
+
+# Per task type: icon, color (palette key or hex), label
+[types.impl]
+icon = "\uF121"
+color = "accent"
+[types.plan]
+icon = "\uF0EB"
+color = "cyan"
+[types.fix]
+icon = "\uF188"
+color = "red"
+[types.review]
+icon = "\uF002"
+color = "magenta"
+[types.ops]
+icon = "\uF0C2"
+color = "yellow"
+[types.doc]
+icon = "\uF0F6"
+color = "light_foreground"
+
+# Per project (key = directory name): icon, color, display label
+# [projects.prob-monorepo]
+# icon = "\uE626"
+# color = "blue"
+# label = "Problyx"

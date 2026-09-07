@@ -1,0 +1,100 @@
+{
+  "SessionStart": [
+    {
+      "matcher": "startup|resume|clear|compact",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "$HOME/.local/bin/agent-event claude",
+          "async": true
+        }
+      ]
+    }
+  ],
+  "UserPromptSubmit": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "$HOME/.local/bin/agent-event claude",
+          "async": true
+        }
+      ]
+    }
+  ],
+  "PermissionRequest": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "$HOME/.local/bin/agent-event claude",
+          "async": true
+        }
+      ]
+    }
+  ],
+  "Notification": [
+    {
+      "matcher": "permission_prompt|idle_prompt|agent_needs_input|agent_completed",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "$HOME/.local/bin/agent-event claude"
+        }
+      ]
+    }
+  ],
+  "Stop": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "$HOME/.local/bin/agent-event claude",
+          "async": true
+        }
+      ]
+    }
+  ],
+  "StopFailure": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "$HOME/.local/bin/agent-event claude"
+        }
+      ]
+    }
+  ],
+  "SubagentStart": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "$HOME/.local/bin/agent-event claude",
+          "async": true
+        }
+      ]
+    }
+  ],
+  "SubagentStop": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "$HOME/.local/bin/agent-event claude",
+          "async": true
+        }
+      ]
+    }
+  ],
+  "SessionEnd": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "$HOME/.local/bin/agent-event claude"
+        }
+      ]
+    }
+  ]
+}

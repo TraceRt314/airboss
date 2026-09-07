@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# torre-focus <pid> [tmux_target] — lleva el foco a la terminal donde vive una sesión.
+#   1. Si hay Hyprland: enfoca la ventana (foot/kitty/...) ancestro del pid.
+#   2. Si hay tmux_target (sesión:ventana.pane): cambia a esa ventana y pane.
+set -u
+dry=0; [[ "${1:-}" == "--dry-run" ]] && { dry=1; shift; }
+pid="${1:-}"; target="${2:-}"
+[[ -z "$pid" && -z "$target" ]] && exit 1
+
+if [[ -n "$pid" ]] && command -v hyprctl >/dev/null 2>&1; then
+  mapfile -t winpids < <(hyprctl clients -j 2>/dev/null | jq -r '.[].pid')
+  p="$pid"
+  for _ in 1 2 3 4 5 6 7 8; do
+    [[ -z "$p" || "$p" == 1 ]] && break
+    for w in "${winpids[@]}"; do
+      if [[ "$w" == "$p" ]]; then
+        if (( dry )); then echo "ventana Hyprland: pid $p ($(hyprctl clients -j | jq -r --argjson p "$p" '.[] | select(.pid==$p) | .class + " · " + .title'))"
+        else hyprctl dispatch "hl.dsp.focus({ window = \"pid:$p\" })" >/dev/null 2>&1 || hyprctl dispatch focuswindow "pid:$p" >/dev/null 2>&1; fi
+        p=""; break 2
+      fi
+    done
+    # ppid: campo tras el ")" que cierra el comm (el comm puede llevar espacios)
+    p=$(sed -E 's/^.*\) [A-Za-z] ([0-9]+).*/\1/' "/proc/$p/stat" 2>/dev/null)
+  done
+  (( dry )) && [[ -n "$p" ]] && echo "sin ventana Hyprland para pid $pid"
+fi
+(( dry )) && { [[ -n "$target" ]] && echo "tmux: $target"; exit 0; }
+
+if [[ -n "$target" ]] && tmux info >/dev/null 2>&1; then
+  sess="${target%%:*}"; rest="${target#*:}"; win="${rest%%.*}"; pane="${rest#*.}"
+  if [[ -n "${TMUX:-}" ]]; then
+    tmux switch-client -t "$sess" 2>/dev/null
+  else
+    # desde fuera de tmux: cambia el cliente que tenga esa sesión (o el más reciente)
+    client=$(tmux list-clients -F '#{client_name} #{session_name}' 2>/dev/null | awk -v s="$sess" '$2==s{print $1; exit}')
+    [[ -z "$client" ]] && client=$(tmux list-clients -F '#{client_name}' 2>/dev/null | head -1)
+    [[ -n "$client" ]] && tmux switch-client -c "$client" -t "$sess" 2>/dev/null
+  fi
+  tmux select-window -t "$sess:$win" 2>/dev/null
+  tmux select-pane -t "$sess:$win.$pane" 2>/dev/null
+fi
+exit 0

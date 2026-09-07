@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# torre — abre la Torre de Control. Dentro de tmux la aloja en una ventana propia "torre".
+if [[ -n "${TMUX:-}" && "${1:-}" != "--here" ]]; then
+  if tmux list-windows -F '#W' | grep -qx torre; then tmux select-window -t torre
+  else tmux new-window -n torre "$HOME/.local/bin/torre-tui"; fi
+else
+  exec "$HOME/.local/bin/torre-tui" "$@"
+fi

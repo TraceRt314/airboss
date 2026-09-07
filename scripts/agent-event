@@ -1,0 +1,248 @@
+#!/usr/bin/env bash
+# agent-event — normaliza eventos de hooks de Claude Code y Codex CLI a un estado
+# por sesión en ~/.local/state/agent-board/sessions/<agente>-<id>.json, pone título
+# canónico "proyecto/tipo: descripción" y avisa por notify-send en las transiciones
+# que importan (espera, error, fin de turno).
+#
+#   agent-event claude              JSON por stdin (hooks de Claude Code)
+#   agent-event codex               JSON por stdin (hooks de Codex CLI)
+#   agent-event codex-notify ...    JSON como último argumento (notify legado de Codex)
+#   agent-event apply-title <file>  aplica el título del estado a Claude (sesión + transcript)
+#
+# Variables: AGENT_BOARD_DIR (estado), AGENT_BOARD_QUIET=1 (sin notificaciones),
+#            AGENT_BOARD_NOTIFY_STOP=0 (no avisar al terminar cada turno),
+#            AGENT_BOARD_INTERNAL=1 (sesión interna, p. ej. el clasificador: ignorar).
+set -u
+export LC_ALL=C.UTF-8
+AGENT="${1:-claude}"
+STATE_DIR="${AGENT_BOARD_DIR:-$HOME/.local/state/agent-board}"
+SESS_DIR="$STATE_DIR/sessions"
+LOG="$STATE_DIR/events.log"
+mkdir -p "$SESS_DIR"
+FMT='^([a-zA-Z0-9_.-]+)/(impl|plan|fix|review|ops|doc): *(.+)$'
+
+# ── aplicar título a Claude: fichero de sesión (claude agents) + transcript (/resume) ─
+apply_title() {
+  local f="$1" sid title tp sfile cur last
+  sid=$(jq -r '.session_id // empty' "$f"); title=$(jq -r '.title // empty' "$f"); tp=$(jq -r '.transcript_path // empty' "$f")
+  [[ -z "$sid" || -z "$title" ]] && return 0
+  [[ "$(jq -r '.agent' "$f")" == "claude" ]] || return 0
+  for sfile in "$HOME"/.claude/sessions/*.json; do
+    [[ -f "$sfile" ]] || continue
+    cur=$(jq -r --arg s "$sid" 'select(.sessionId==$s) | .name // empty' "$sfile" 2>/dev/null) || continue
+    [[ -z "$cur" ]] && { grep -q "\"sessionId\":\"$sid\"" "$sfile" 2>/dev/null || continue; }
+    if [[ "$cur" != "$title" ]]; then
+      jq --arg t "$title" '.name=$t | .nameSource="user"' "$sfile" > "$sfile.tmp" && mv "$sfile.tmp" "$sfile"
+    fi
+  done
+  if [[ -n "$tp" && -f "$tp" ]]; then
+    last=$(grep -o '"type":"custom-title","customTitle":"[^"]*"' "$tp" | tail -1 | sed 's/.*"customTitle":"//; s/"$//')
+    if [[ "$last" != "$title" ]]; then
+      printf '%s\n' "$(jq -nc --arg t "$title" --arg s "$sid" '{type:"custom-title", customTitle:$t, sessionId:$s}')" >> "$tp"
+    fi
+  fi
+}
+if [[ "$AGENT" == "apply-title" ]]; then apply_title "${2:-}"; exit 0; fi
+
+# ── bootstrap <file>: sesiones creadas por sync (sin primer prompt): objetivo desde el
+#    transcript y título (normalizando el nombre del usuario, o Haiku en segundo plano) ─
+infer_type() {
+  local p="${1,,}"
+  if   [[ "$p" =~ (arregl|fix|bug|error|falla|no funciona|rompe|crash|debug) ]]; then echo fix
+  elif [[ "$p" =~ (revisa|audita|review|verifica|reverif) ]]; then echo review
+  elif [[ "$p" =~ (plan|diseña|evalúa|propón|compara|investiga|busca en internet) ]]; then echo plan
+  elif [[ "$p" =~ (deploy|despliega|railway|vercel|gcloud|wrangler|redeploy|ssh) ]]; then echo ops
+  elif [[ "$p" =~ (documenta|escribe un|readme|handoff|obsidian) ]]; then echo doc
+  else echo impl; fi
+}
+if [[ "$AGENT" == "bootstrap" ]]; then
+  f="${2:-}"; [[ -f "$f" ]] || exit 0
+  sid=$(jq -r '.session_id' "$f"); cwd=$(jq -r '.cwd' "$f"); project=$(jq -r '.project' "$f")
+  [[ "$(jq -r '.agent' "$f")" == "claude" ]] || exit 0
+  goal=$(jq -r '.goal // empty' "$f"); tp=$(jq -r '.transcript_path // empty' "$f")
+  if [[ -z "$tp" ]]; then
+    slug=$(printf '%s' "$cwd" | sed 's/[^A-Za-z0-9]/-/g'); cand="$HOME/.claude/projects/$slug/$sid.jsonl"
+    [[ -f "$cand" ]] && tp="$cand"
+  fi
+  if [[ -z "$goal" && -n "$tp" && -f "$tp" ]]; then
+    goal=$(jq -r 'select(.type=="user" and (.isMeta|not)) | .message.content
+      | if type=="string" then . elif type=="array" then (map(select(.type=="text")|.text)|join(" ")) else empty end
+      | select(length>0)' "$tp" 2>/dev/null | sed 's/^[[:space:]]*//' | grep -v -E '^(<|/|\[Pasted)' | grep -v -E '<command-(message|name)>' | head -1 | tr -s '[:space:]' ' ' | cut -c1-240)
+  fi
+  read -r name nsrc < <(jq -r --arg s "$sid" 'select(.sessionId==$s) | "\(.name // "") \(.nameSource // "")"' "$HOME"/.claude/sessions/*.json 2>/dev/null | head -1)
+  title=$(jq -r '.title // empty' "$f"); type=$(jq -r '.type // "impl"' "$f"); tsrc=$(jq -r '.type_source // "auto"' "$f")
+  [[ "$tsrc" == "auto" && -n "$goal" ]] && type=$(infer_type "$goal")
+  spawn=0; title_src=$(jq -r '.title_source // empty' "$f"); raw=""
+  if [[ -z "$title" ]]; then
+    if [[ "$nsrc" == "user" && -n "$name" ]]; then
+      raw="$name"
+      if [[ "$name" =~ $FMT ]]; then title="$name"; type="${BASH_REMATCH[2]}"; tsrc="name"; title_src="name"
+      else title="$project/$type: $name"; title_src="user"; fi
+    elif [[ -n "$goal" ]]; then
+      words=$(printf '%s' "$goal" | cut -d' ' -f1-6); title="$project/$type: ${words,,}"; title="${title:0:70}"; title_src="provisional"; spawn=1
+    fi
+  fi
+  exec 9>"$f.lock"; flock -w 5 9 || exit 0
+  jq --arg goal "$goal" --arg tp "$tp" --arg title "$title" --arg tsrc "$title_src" --arg type "$type" --arg tysrc "$tsrc" --arg raw "$raw" --argjson sp "$spawn" \
+     '.goal=(if $goal!="" then $goal else .goal end) | .transcript_path=(if $tp!="" then $tp else .transcript_path end)
+      | .title=(if $title!="" then $title else .title end) | .title_source=(if $tsrc!="" then $tsrc else .title_source end)
+      | .type=$type | .type_source=$tysrc | .raw_name=(if $raw!="" then $raw else .raw_name end) | .title_pending=(if $sp==1 then 1 else (.title_pending // 0) end) | .bootstrapped=1' \
+     "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  flock -u 9
+  [[ -n "$title" ]] && apply_title "$f"
+  (( spawn )) && setsid -f "$HOME/.local/bin/agent-title" "$f" >/dev/null 2>&1 </dev/null
+  exit 0
+fi
+[[ "${AGENT_BOARD_INTERNAL:-0}" == "1" ]] && exit 0   # sesión interna (clasificador): sin ficha
+
+if [[ "$AGENT" == "codex-notify" ]]; then
+  AGENT=codex
+  input="${*: -1}"
+else
+  input=$(cat)
+fi
+[[ -z "${input:-}" ]] && exit 0
+jq -e . >/dev/null 2>&1 <<<"$input" || exit 0
+
+j() { jq -r "$1 // empty" <<<"$input" 2>/dev/null; }
+trunc() { local s="${1//$'\n'/ }"; s="${s//\"/\'}"; printf '%s' "${s:0:${2:-200}}"; }
+
+event=$(j '.hook_event_name')
+[[ -z "$event" && "$(j '.type')" == "agent-turn-complete" ]] && event="CodexNotify"
+[[ -z "$event" ]] && exit 0
+sid=$(j '.session_id'); [[ -z "$sid" ]] && sid=$(j '."thread-id"')
+[[ -z "$sid" ]] && exit 0
+cwd=$(j '.cwd'); [[ -z "$cwd" ]] && cwd="$PWD"
+[[ "$cwd" == *"/.claude-mem/"* ]] && exit 0   # sesiones internas del plugin claude-mem
+now=$(date +%s)
+file="$SESS_DIR/$AGENT-$sid.json"
+exec 9>"$file.lock"; flock -w 5 9 || exit 0
+old='{}'; [[ -f "$file" ]] && old=$(cat "$file")
+oldget() { jq -r "$1 // empty" <<<"$old" 2>/dev/null; }
+
+# ── identidad: nombre en Claude/Codex, proyecto, pane ───────────────────────
+name=""; nsrc=""
+if [[ "$AGENT" == "claude" ]]; then
+  read -r name nsrc < <(jq -r --arg s "$sid" 'select(.sessionId==$s) | "\(.name // "") \(.nameSource // "")"' "$HOME"/.claude/sessions/*.json 2>/dev/null | head -1)
+else
+  short="${sid#thr_}"
+  name=$(jq -r --arg s "$sid" --arg t "$short" 'select(.id==$s or .id==$t) | .thread_name // empty' "$HOME/.codex/session_index.jsonl" 2>/dev/null | tail -1)
+fi
+[[ -z "$name" ]] && name=$(oldget '.name')
+tp=$(j '.transcript_path'); [[ -z "$tp" ]] && tp=$(oldget '.transcript_path')
+
+if [[ "$cwd" == "$HOME" ]]; then project="home"
+else
+  root=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)
+  project=$(basename "${root:-$cwd}")
+fi
+pane="${TMUX_PANE:-$(oldget '.tmux_pane')}"
+tmux_target=""
+[[ -n "$pane" ]] && tmux_target=$(tmux display-message -p -t "$pane" '#S:#I.#P' 2>/dev/null)
+
+# ── tipo: nombre con formato > modo plan > heurística (hasta que Haiku lo afine) ─
+type=$(oldget '.type'); type_src=$(oldget '.type_source')
+if [[ "$name" =~ $FMT && "$name" != "$(oldget '.title')" ]]; then
+  # nombre con formato puesto por el usuario (no el que aplicamos nosotros)
+  type="${BASH_REMATCH[2]}"; type_src="name"
+elif [[ "$type_src" != "name" && "$type_src" != "user" ]]; then
+  pm=$(j '.permission_mode'); prompt=$(j '.prompt')
+  if [[ "$pm" == "plan" && "$type_src" != "model" ]]; then type="plan"; type_src="mode"
+  elif [[ -n "$prompt" && ( -z "$type" || "$type_src" == "auto" ) ]]; then
+    p="${prompt,,}"
+    if   [[ "$p" =~ (arregl|fix|bug|error|falla|no funciona|rompe|crash|debug) ]]; then type="fix"
+    elif [[ "$p" =~ (revisa|audita|review|verifica|reverif) ]]; then type="review"
+    elif [[ "$p" =~ (plan|diseña|evalúa|propón|compara|investiga|busca en internet) ]]; then type="plan"
+    elif [[ "$p" =~ (deploy|despliega|railway|vercel|gcloud|wrangler|redeploy|ssh) ]]; then type="ops"
+    elif [[ "$p" =~ (documenta|escribe un|readme|handoff|obsidian) ]]; then type="doc"
+    else type="impl"; fi
+    type_src="auto"
+  fi
+fi
+[[ -z "$type" ]] && { type="impl"; type_src="auto"; }
+
+# ── estado según evento ─────────────────────────────────────────────────────
+prev=$(oldget '.state'); state="$prev"; waiting_for=$(oldget '.waiting_for')
+goal=$(oldget '.goal'); last=$(oldget '.last_message'); subs=$(oldget '.subagents'); subs="${subs:-0}"
+model=$(j '.model'); [[ -z "$model" ]] && model=$(oldget '.model')
+turns=$(oldget '.turns'); turns="${turns:-0}"
+case "$event" in
+  SessionStart)      [[ -z "$prev" || "$prev" == "done" ]] && state="idle"; waiting_for="" ;;
+  UserPromptSubmit)  state="working"; waiting_for=""; turns=$((turns+1))
+                     [[ -z "$goal" ]] && goal=$(trunc "$(j '.prompt')" 240) ;;
+  PermissionRequest) state="waiting"; tn=$(j '.tool_name'); ti=$(j '.tool_input.command // .tool_input.file_path // .tool_input.url')
+                     waiting_for="permiso: $tn $(trunc "$ti" 80)" ;;
+  Notification)      nt=$(j '.notification_type')
+                     case "$nt" in
+                       permission_prompt)  state="waiting"; [[ -z "$waiting_for" ]] && waiting_for="permiso: $(trunc "$(j '.message')" 100)" ;;
+                       agent_needs_input)  state="waiting"; waiting_for="pregunta: $(trunc "$(j '.message')" 100)" ;;
+                       idle_prompt)        state="idle";    waiting_for="" ;;
+                       agent_completed)    state="done";    waiting_for="" ;;
+                       *) exit 0 ;;
+                     esac ;;
+  Stop|CodexNotify)  state="idle"; waiting_for=""; m=$(j '.last_assistant_message // ."last-assistant-message"'); [[ -n "$m" ]] && last=$(trunc "$m" 400) ;;
+  StopFailure)       state="error"; waiting_for="error: $(j '.error_type')" ;;
+  Interrupt)         state="idle"; waiting_for="" ;;
+  SubagentStart)     subs=$((subs+1)) ;;
+  SubagentStop)      subs=$((subs>0 ? subs-1 : 0)) ;;
+  SessionEnd)        state="done"; waiting_for="" ;;
+  PreCompact|PostCompact) ;;
+  *) exit 0 ;;
+esac
+
+# ── título canónico ─────────────────────────────────────────────────────────
+title=$(oldget '.title'); title_src=$(oldget '.title_source'); raw_prev=$(oldget '.raw_name'); pending=$(oldget '.title_pending')
+apply=0; spawn=0
+if [[ -n "$name" && "$name" =~ $FMT && "$name" != "$title" ]]; then
+  # nombre ya en formato (del usuario, de --name o de una rutina): manda tal cual, sin clasificador
+  title="$name"; title_src="name"; raw_prev="$name"; pending=0
+elif [[ "$AGENT" == "claude" && "$nsrc" == "user" && -n "$name" && "$name" != "$title" && "$name" != "$raw_prev" ]]; then
+  # /rename del usuario (si name == title es nuestro propio nombre aplicado)
+  raw_prev="$name"
+  if [[ "$name" =~ $FMT ]]; then title="$name"; title_src="name"
+  else title="$project/$type: $name"; title_src="user"; fi
+  apply=1
+elif [[ "$AGENT" == "codex" && -n "$name" && "$name" =~ $FMT && "$name" != "$title" ]]; then
+  title="$name"; title_src="name"
+fi
+if [[ -z "$title" && -n "$goal" ]]; then
+  # provisional al instante; Haiku lo afina en segundo plano
+  words=$(printf '%s' "$goal" | tr -s '[:space:]' ' ' | cut -d' ' -f1-6); words="${words,,}"
+  title="$project/$type: ${words:0:48}"; title_src="provisional"; apply=1
+  [[ "${pending:-0}" != "1" ]] && { spawn=1; pending=1; }
+fi
+
+# ── upsert ──────────────────────────────────────────────────────────────────
+new=$(jq -n \
+  --arg agent "$AGENT" --arg sid "$sid" --arg name "$name" --arg project "$project" --arg cwd "$cwd" \
+  --arg pane "$pane" --arg tmux "$tmux_target" --arg type "$type" --arg tsrc "$type_src" \
+  --arg state "$state" --arg wf "$waiting_for" --arg goal "$goal" --arg last "$last" --arg tp "$tp" \
+  --arg title "$title" --arg titlesrc "$title_src" --arg raw "$raw_prev" --argjson pending "${pending:-0}" \
+  --arg model "$model" --argjson subs "$subs" --argjson turns "$turns" --argjson now "$now" --arg ev "$event" \
+  '{agent:$agent, session_id:$sid, name:$name, project:$project, cwd:$cwd, tmux_pane:$pane, tmux_target:$tmux,
+    type:$type, type_source:$tsrc, state:$state, waiting_for:(if $wf=="" then null else $wf end),
+    goal:$goal, last_message:$last, model:$model, subagents:$subs, turns:$turns, updated:$now, last_event:$ev,
+    transcript_path:$tp, title:$title, title_source:$titlesrc, raw_name:$raw, title_pending:$pending}')
+jq -n --argjson o "$old" --argjson n "$new" --argjson now "$now" \
+  '($o + $n) | .started = ($o.started // $now)' > "$file.tmp" && mv "$file.tmp" "$file"
+flock -u 9
+printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -Is)" "$AGENT" "$project" "$event" "$state" "${title:-$name}" >> "$LOG"
+
+(( apply )) && apply_title "$file"
+(( spawn )) && setsid -f "$HOME/.local/bin/agent-title" "$file" >/dev/null 2>&1 </dev/null
+
+# ── notificaciones en transiciones ──────────────────────────────────────────
+[[ "${AGENT_BOARD_QUIET:-0}" == "1" ]] && exit 0
+command -v notify-send >/dev/null || exit 0
+label="${AGENT^} · ${title:-${name:-$project}}"
+icon="utilities-terminal"
+if [[ "$state" == "waiting" && "$prev" != "waiting" ]]; then
+  notify-send -a "Torre de Control" -u critical -i dialog-question "$label" "Te espera. ${waiting_for}" 2>/dev/null
+elif [[ "$state" == "error" && "$prev" != "error" ]]; then
+  notify-send -a "Torre de Control" -u critical -i dialog-error "$label" "Error: ${waiting_for#error: }" 2>/dev/null
+elif [[ "$state" == "idle" && "$prev" == "working" && "${AGENT_BOARD_NOTIFY_STOP:-1}" == "1" ]]; then
+  notify-send -a "Torre de Control" -u normal -t 8000 -i "$icon" "$label · terminó" "$(trunc "${last:-Turno completado}" 160)" 2>/dev/null
+elif [[ "$state" == "done" && "$prev" != "done" ]]; then
+  notify-send -a "Torre de Control" -u low -t 5000 -i "$icon" "$label" "Sesión cerrada" 2>/dev/null
+fi
+exit 0
