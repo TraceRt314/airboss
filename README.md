@@ -121,7 +121,26 @@ torre expects `project/type: description`, e.g. `epsilon/impl: dynamic reviews`.
 
 ## Compared with
 
-COMPARISON_TABLE
+Checked against each project's repository or site on 2026-09-07. `?` means the project does not document it.
+
+| | kind | agents | Linux | license | cloud / account | waiting alert | jump to terminal | by project & task |
+|---|---|---|---|---|---|---|---|---|
+| **torre** | TUI, Go | Claude Code, Codex | ✓ | MIT | none | ✓ desktop notification | ✓ compositor window + tmux pane | ✓ project / type |
+| [Orca](https://github.com/stablyai/orca) | Electron GUI + mobile app | 30+ | ✓ | MIT | mobile pairing goes through a cloud relay | ✓ | ? (built-in terminals) | GitHub / Linear boards |
+| [T3 Code](https://github.com/pingdotgg/t3code) | web + Electron + mobile | Codex, Claude Code, Cursor, OpenCode… | ✓ | MIT | local backend | ? | ? | ? |
+| [agent-deck](https://github.com/asheshgoplani/agent-deck) | TUI on tmux | Claude Code, Codex, Gemini, Copilot… | ✓ | MIT | none | ✓ tmux status, Telegram/Slack | ✓ keys 1–9 to waiting sessions | ✓ declarative groups |
+| [claude-squad](https://github.com/smtg-ai/claude-squad) | TUI, tmux + worktrees | Claude Code, Codex, Gemini, Aider | ✓ | AGPL-3.0 | none | – (`autoyes` instead) | attach to session | per session worktrees |
+| [Conductor](https://www.conductor.build/) | native Mac app | Claude Code, Codex, Cursor, OpenCode | – | proprietary | ? | ? | ? | ✓ worktree per task |
+| [Vibe Kanban](https://github.com/BloopAI/vibe-kanban) | web kanban (sunsetting) | 10+ | ✓ | Apache-2.0 | self-host or cloud | ? | ? | ✓ kanban issues |
+
+Where torre differs:
+
+- **It watches, it does not run.** Orca, T3 Code, Conductor and claude-squad launch and own the agent processes, usually one worktree each. torre attaches to the sessions you already started in whatever terminal you like, and reads their state from the hooks the CLIs already expose. Nothing changes in how you work; there is just a window that knows.
+- **It knows where the terminal is.** agent-deck jumps between tmux sessions; torre resolves the compositor window that owns the agent process on Hyprland or Sway and focuses it, then selects the tmux pane if there is one. Works for sessions outside tmux.
+- **It types the work.** Sessions carry a task type (`impl`, `plan`, `fix`, `review`, `ops`, `doc`) that drives color, grouping and, if you want, the model and effort profile at launch. A background classifier names untitled sessions.
+- **It is a desktop citizen, not an app.** Palette from the active Omarchy theme or nine built-ins, Nerd Font icons, a tmux segment and a JSON summary for starship or waybar. One Go binary plus three shell scripts, no Electron, no daemon beyond a 5-second systemd timer, no account.
+
+If you want a GUI with a phone app and dozens of agents, Orca is the mature choice. If you want the agents to run inside isolated worktrees with diff review, look at Conductor (Mac) or claude-squad. agent-deck is the closest cousin if your whole life is in tmux.
 
 torre is the small, terminal-native option: it does not run your agents, isolate worktrees or offer a web UI. It watches the sessions you already have, in the terminals you already use, and gets out of the way.
 
