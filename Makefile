@@ -7,7 +7,7 @@ build:
 install: build
 	./install.sh
 
-test:
+test: build
 	go vet ./...
 	bash -n scripts/*
 	./torre-tui -version
