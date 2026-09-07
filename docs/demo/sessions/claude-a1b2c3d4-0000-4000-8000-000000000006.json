@@ -2,7 +2,7 @@
   "agent": "claude",
   "session_id": "a1b2c3d4-0000-4000-8000-000000000006",
   "project": "thesis",
-  "cwd": "/home/tracert/Work/thesis",
+  "cwd": "/home/mia/Work/thesis",
   "type": "plan",
   "type_source": "model",
   "title": "thesis/plan: evaluation methodology",

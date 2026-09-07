@@ -9,8 +9,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Paleta con las claves del colors.toml de Omarchy. Cualquier tema builtin o el
-// tema activo de Omarchy rellena estas claves; [theme.colors] las sobreescribe.
+// Palette with the keys from Omarchy's colors.toml. Any builtin theme or the
+// active Omarchy theme fills these keys; [theme.colors] overrides them.
 var pal = map[string]string{}
 var themeName = ""
 var themeDark = true
@@ -70,7 +70,7 @@ func omarchyThemeDir() string {
 	return filepath.Join(os.Getenv("HOME"), ".local/state/omarchy/current/theme")
 }
 
-// loadOmarchy lee colors.toml del tema activo de Omarchy; devuelve false si no hay.
+// loadOmarchy reads colors.toml from the active Omarchy theme; returns false if none.
 func loadOmarchy() bool {
 	b, err := os.ReadFile(filepath.Join(omarchyThemeDir(), "colors.toml"))
 	if err != nil {
@@ -112,7 +112,7 @@ func loadTheme(cfg ThemeConfig) {
 	for k, v := range cfg.Colors {
 		pal[k] = v
 	}
-	// alias: si el tema no trae alguna clave, deriva de las que hay
+	// alias: if the theme is missing a key, derive it from the ones present
 	if pal["accent"] == "" {
 		pal["accent"] = pal["blue"]
 	}
@@ -123,7 +123,7 @@ func loadTheme(cfg ThemeConfig) {
 		pal["selection"] = pal["lighter_background"]
 	}
 	themeDark = pal["mode"] != "light"
-	// evita que lipgloss interrogue al terminal (5 s en ptys mudos)
+	// avoids lipgloss probing the terminal (5s on silent ptys)
 	lipgloss.SetHasDarkBackground(themeDark)
 }
 

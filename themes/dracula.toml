@@ -1,4 +1,4 @@
-# torre theme: dracula. Same keys as Omarchy colors.toml.
+# airboss theme: dracula. Same keys as Omarchy colors.toml.
 # Use with: [theme] source = "builtin", name = "dracula"
 mode = "dark"
 accent = "#bd93f9"

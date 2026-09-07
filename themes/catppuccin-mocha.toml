@@ -1,4 +1,4 @@
-# torre theme: catppuccin-mocha. Same keys as Omarchy colors.toml.
+# airboss theme: catppuccin-mocha. Same keys as Omarchy colors.toml.
 # Use with: [theme] source = "builtin", name = "catppuccin-mocha"
 mode = "dark"
 accent = "#89b4fa"

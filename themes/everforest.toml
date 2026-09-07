@@ -1,4 +1,4 @@
-# torre theme: everforest. Same keys as Omarchy colors.toml.
+# airboss theme: everforest. Same keys as Omarchy colors.toml.
 # Use with: [theme] source = "builtin", name = "everforest"
 mode = "dark"
 accent = "#a7c080"

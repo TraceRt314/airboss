@@ -1,4 +1,4 @@
-# torre theme: gruvbox-dark. Same keys as Omarchy colors.toml.
+# airboss theme: gruvbox-dark. Same keys as Omarchy colors.toml.
 # Use with: [theme] source = "builtin", name = "gruvbox-dark"
 mode = "dark"
 accent = "#fabd2f"

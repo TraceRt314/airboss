@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# agent-event — normaliza eventos de hooks de Claude Code y Codex CLI a un estado
-# por sesión en ~/.local/state/agent-board/sessions/<agente>-<id>.json, pone título
-# canónico "proyecto/tipo: descripción" y avisa por notify-send en las transiciones
-# que importan (espera, error, fin de turno).
+# agent-event — normalizes Claude Code and Codex CLI hook events into a per-session
+# state file at ~/.local/state/agent-board/sessions/<agent>-<id>.json, sets the
+# canonical title "project/type: description", and notifies via notify-send on the
+# transitions that matter (waiting, error, turn done).
 #
-#   agent-event claude              JSON por stdin (hooks de Claude Code)
-#   agent-event codex               JSON por stdin (hooks de Codex CLI)
-#   agent-event codex-notify ...    JSON como último argumento (notify legado de Codex)
-#   agent-event apply-title <file>  aplica el título del estado a Claude (sesión + transcript)
+#   agent-event claude              JSON on stdin (Claude Code hooks)
+#   agent-event codex                JSON on stdin (Codex CLI hooks)
+#   agent-event codex-notify ...     JSON as the last argument (legacy Codex notify)
+#   agent-event apply-title <file>   applies the state's title to Claude (session + transcript)
 #
-# Variables: AGENT_BOARD_DIR (estado), AGENT_BOARD_QUIET=1 (sin notificaciones),
-#            AGENT_BOARD_NOTIFY_STOP=0 (no avisar al terminar cada turno),
-#            AGENT_BOARD_INTERNAL=1 (sesión interna, p. ej. el clasificador: ignorar).
+# Variables: AGENT_BOARD_DIR (state), AGENT_BOARD_QUIET=1 (no notifications),
+#            AGENT_BOARD_NOTIFY_STOP=0 (don't notify when each turn ends),
+#            AGENT_BOARD_INTERNAL=1 (internal session, e.g. the classifier: ignore).
 set -u
 export LC_ALL=C.UTF-8
 AGENT="${1:-claude}"
@@ -21,7 +21,16 @@ LOG="$STATE_DIR/events.log"
 mkdir -p "$SESS_DIR"
 FMT='^([a-zA-Z0-9_.-]+)/(impl|plan|fix|review|ops|doc): *(.+)$'
 
-# ── aplicar título a Claude: fichero de sesión (claude agents) + transcript (/resume) ─
+# ── language for user-facing text: English by default, Spanish when AIRBOSS_LANG
+#    (or $LANG) says es ────────────────────────────────────────────────────
+_lang="${AIRBOSS_LANG:-${LANG%%[_.]*}}"
+if [[ "$_lang" == "es" ]]; then
+  MSG_WAITING="Te espera."; MSG_ERROR="Error: "; MSG_TURN_DONE="Turno completado"; MSG_DONE_SUFFIX="terminó"; MSG_SESSION_CLOSED="Sesión cerrada"
+else
+  MSG_WAITING="Waiting on you."; MSG_ERROR="Error: "; MSG_TURN_DONE="Turn done"; MSG_DONE_SUFFIX="done"; MSG_SESSION_CLOSED="Session closed"
+fi
+
+# ── apply title to Claude: session file (claude agents) + transcript (/resume) ─
 apply_title() {
   local f="$1" sid title tp sfile cur last
   sid=$(jq -r '.session_id // empty' "$f"); title=$(jq -r '.title // empty' "$f"); tp=$(jq -r '.transcript_path // empty' "$f")
@@ -44,15 +53,15 @@ apply_title() {
 }
 if [[ "$AGENT" == "apply-title" ]]; then apply_title "${2:-}"; exit 0; fi
 
-# ── bootstrap <file>: sesiones creadas por sync (sin primer prompt): objetivo desde el
-#    transcript y título (normalizando el nombre del usuario, o Haiku en segundo plano) ─
+# ── bootstrap <file>: sessions created by sync (no first prompt): goal from the
+#    transcript and title (normalizing the user's name, or Haiku in the background) ─
 infer_type() {
   local p="${1,,}"
-  if   [[ "$p" =~ (arregl|fix|bug|error|falla|no funciona|rompe|crash|debug) ]]; then echo fix
-  elif [[ "$p" =~ (revisa|audita|review|verifica|reverif) ]]; then echo review
-  elif [[ "$p" =~ (plan|diseña|evalúa|propón|compara|investiga|busca en internet) ]]; then echo plan
+  if   [[ "$p" =~ (arregl|fix|bug|error|falla|no funciona|rompe|broken|crash|debug) ]]; then echo fix
+  elif [[ "$p" =~ (revisa|audita|review|audit|verifica|verify|reverif) ]]; then echo review
+  elif [[ "$p" =~ (plan|diseña|design|evalúa|evaluate|propón|propose|compara|compare|investiga|investigate|research) ]]; then echo plan
   elif [[ "$p" =~ (deploy|despliega|railway|vercel|gcloud|wrangler|redeploy|ssh) ]]; then echo ops
-  elif [[ "$p" =~ (documenta|escribe un|readme|handoff|obsidian) ]]; then echo doc
+  elif [[ "$p" =~ (documenta|document|escribe un|write a|readme|docs|handoff|obsidian) ]]; then echo doc
   else echo impl; fi
 }
 if [[ "$AGENT" == "bootstrap" ]]; then
@@ -93,7 +102,7 @@ if [[ "$AGENT" == "bootstrap" ]]; then
   (( spawn )) && setsid -f "$HOME/.local/bin/agent-title" "$f" >/dev/null 2>&1 </dev/null
   exit 0
 fi
-[[ "${AGENT_BOARD_INTERNAL:-0}" == "1" ]] && exit 0   # sesión interna (clasificador): sin ficha
+[[ "${AGENT_BOARD_INTERNAL:-0}" == "1" ]] && exit 0   # internal session (classifier): no file
 
 if [[ "$AGENT" == "codex-notify" ]]; then
   AGENT=codex
@@ -113,14 +122,14 @@ event=$(j '.hook_event_name')
 sid=$(j '.session_id'); [[ -z "$sid" ]] && sid=$(j '."thread-id"')
 [[ -z "$sid" ]] && exit 0
 cwd=$(j '.cwd'); [[ -z "$cwd" ]] && cwd="$PWD"
-[[ "$cwd" == *"/.claude-mem/"* ]] && exit 0   # sesiones internas del plugin claude-mem
+[[ "$cwd" == *"/.claude-mem/"* ]] && exit 0   # internal sessions of the claude-mem plugin
 now=$(date +%s)
 file="$SESS_DIR/$AGENT-$sid.json"
 exec 9>"$file.lock"; flock -w 5 9 || exit 0
 old='{}'; [[ -f "$file" ]] && old=$(cat "$file")
 oldget() { jq -r "$1 // empty" <<<"$old" 2>/dev/null; }
 
-# ── identidad: nombre en Claude/Codex, proyecto, pane ───────────────────────
+# ── identity: name in Claude/Codex, project, pane ───────────────────────────
 name=""; nsrc=""
 if [[ "$AGENT" == "claude" ]]; then
   read -r name nsrc < <(jq -r --arg s "$sid" 'select(.sessionId==$s) | "\(.name // "") \(.nameSource // "")"' "$HOME"/.claude/sessions/*.json 2>/dev/null | head -1)
@@ -140,28 +149,28 @@ pane="${TMUX_PANE:-$(oldget '.tmux_pane')}"
 tmux_target=""
 [[ -n "$pane" ]] && tmux_target=$(tmux display-message -p -t "$pane" '#S:#I.#P' 2>/dev/null)
 
-# ── tipo: nombre con formato > modo plan > heurística (hasta que Haiku lo afine) ─
+# ── type: formatted name > plan mode > heuristic (until Haiku refines it) ──
 type=$(oldget '.type'); type_src=$(oldget '.type_source')
 if [[ "$name" =~ $FMT && "$name" != "$(oldget '.title')" ]]; then
-  # nombre con formato puesto por el usuario (no el que aplicamos nosotros)
+  # formatted name set by the user (not the one we applied ourselves)
   type="${BASH_REMATCH[2]}"; type_src="name"
 elif [[ "$type_src" != "name" && "$type_src" != "user" ]]; then
   pm=$(j '.permission_mode'); prompt=$(j '.prompt')
   if [[ "$pm" == "plan" && "$type_src" != "model" ]]; then type="plan"; type_src="mode"
   elif [[ -n "$prompt" && ( -z "$type" || "$type_src" == "auto" ) ]]; then
     p="${prompt,,}"
-    if   [[ "$p" =~ (arregl|fix|bug|error|falla|no funciona|rompe|crash|debug) ]]; then type="fix"
-    elif [[ "$p" =~ (revisa|audita|review|verifica|reverif) ]]; then type="review"
-    elif [[ "$p" =~ (plan|diseña|evalúa|propón|compara|investiga|busca en internet) ]]; then type="plan"
+    if   [[ "$p" =~ (arregl|fix|bug|error|falla|no funciona|rompe|broken|crash|debug) ]]; then type="fix"
+    elif [[ "$p" =~ (revisa|audita|review|audit|verifica|verify|reverif) ]]; then type="review"
+    elif [[ "$p" =~ (plan|diseña|design|evalúa|evaluate|propón|propose|compara|compare|investiga|investigate|research) ]]; then type="plan"
     elif [[ "$p" =~ (deploy|despliega|railway|vercel|gcloud|wrangler|redeploy|ssh) ]]; then type="ops"
-    elif [[ "$p" =~ (documenta|escribe un|readme|handoff|obsidian) ]]; then type="doc"
+    elif [[ "$p" =~ (documenta|document|escribe un|write a|readme|docs|handoff|obsidian) ]]; then type="doc"
     else type="impl"; fi
     type_src="auto"
   fi
 fi
 [[ -z "$type" ]] && { type="impl"; type_src="auto"; }
 
-# ── estado según evento ─────────────────────────────────────────────────────
+# ── state per event ─────────────────────────────────────────────────────────
 prev=$(oldget '.state'); state="$prev"; waiting_for=$(oldget '.waiting_for')
 goal=$(oldget '.goal'); last=$(oldget '.last_message'); subs=$(oldget '.subagents'); subs="${subs:-0}"
 model=$(j '.model'); [[ -z "$model" ]] && model=$(oldget '.model')
@@ -171,11 +180,11 @@ case "$event" in
   UserPromptSubmit)  state="working"; waiting_for=""; turns=$((turns+1))
                      [[ -z "$goal" ]] && goal=$(trunc "$(j '.prompt')" 240) ;;
   PermissionRequest) state="waiting"; tn=$(j '.tool_name'); ti=$(j '.tool_input.command // .tool_input.file_path // .tool_input.url')
-                     waiting_for="permiso: $tn $(trunc "$ti" 80)" ;;
+                     waiting_for="permission: $tn $(trunc "$ti" 80)" ;;
   Notification)      nt=$(j '.notification_type')
                      case "$nt" in
-                       permission_prompt)  state="waiting"; [[ -z "$waiting_for" ]] && waiting_for="permiso: $(trunc "$(j '.message')" 100)" ;;
-                       agent_needs_input)  state="waiting"; waiting_for="pregunta: $(trunc "$(j '.message')" 100)" ;;
+                       permission_prompt)  state="waiting"; [[ -z "$waiting_for" ]] && waiting_for="permission: $(trunc "$(j '.message')" 100)" ;;
+                       agent_needs_input)  state="waiting"; waiting_for="question: $(trunc "$(j '.message')" 100)" ;;
                        idle_prompt)        state="idle";    waiting_for="" ;;
                        agent_completed)    state="done";    waiting_for="" ;;
                        *) exit 0 ;;
@@ -190,14 +199,14 @@ case "$event" in
   *) exit 0 ;;
 esac
 
-# ── título canónico ─────────────────────────────────────────────────────────
+# ── canonical title ─────────────────────────────────────────────────────────
 title=$(oldget '.title'); title_src=$(oldget '.title_source'); raw_prev=$(oldget '.raw_name'); pending=$(oldget '.title_pending')
 apply=0; spawn=0
 if [[ -n "$name" && "$name" =~ $FMT && "$name" != "$title" ]]; then
-  # nombre ya en formato (del usuario, de --name o de una rutina): manda tal cual, sin clasificador
+  # name already in format (from the user, --name, or a routine): use it as-is, no classifier
   title="$name"; title_src="name"; raw_prev="$name"; pending=0
 elif [[ "$AGENT" == "claude" && "$nsrc" == "user" && -n "$name" && "$name" != "$title" && "$name" != "$raw_prev" ]]; then
-  # /rename del usuario (si name == title es nuestro propio nombre aplicado)
+  # user /rename (if name == title it's our own applied name)
   raw_prev="$name"
   if [[ "$name" =~ $FMT ]]; then title="$name"; title_src="name"
   else title="$project/$type: $name"; title_src="user"; fi
@@ -206,7 +215,7 @@ elif [[ "$AGENT" == "codex" && -n "$name" && "$name" =~ $FMT && "$name" != "$tit
   title="$name"; title_src="name"
 fi
 if [[ -z "$title" && -n "$goal" ]]; then
-  # provisional al instante; Haiku lo afina en segundo plano
+  # instant provisional title; Haiku refines it in the background
   words=$(printf '%s' "$goal" | tr -s '[:space:]' ' ' | cut -d' ' -f1-6); words="${words,,}"
   title="$project/$type: ${words:0:48}"; title_src="provisional"; apply=1
   [[ "${pending:-0}" != "1" ]] && { spawn=1; pending=1; }
@@ -231,18 +240,18 @@ printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -Is)" "$AGENT" "$project" "$event" "$s
 (( apply )) && apply_title "$file"
 (( spawn )) && setsid -f "$HOME/.local/bin/agent-title" "$file" >/dev/null 2>&1 </dev/null
 
-# ── notificaciones en transiciones ──────────────────────────────────────────
+# ── notifications on transitions ────────────────────────────────────────────
 [[ "${AGENT_BOARD_QUIET:-0}" == "1" ]] && exit 0
 command -v notify-send >/dev/null || exit 0
 label="${AGENT^} · ${title:-${name:-$project}}"
 icon="utilities-terminal"
 if [[ "$state" == "waiting" && "$prev" != "waiting" ]]; then
-  notify-send -a "Torre de Control" -u critical -i dialog-question "$label" "Te espera. ${waiting_for}" 2>/dev/null
+  notify-send -a "airboss" -u critical -i dialog-question "$label" "$MSG_WAITING ${waiting_for}" 2>/dev/null
 elif [[ "$state" == "error" && "$prev" != "error" ]]; then
-  notify-send -a "Torre de Control" -u critical -i dialog-error "$label" "Error: ${waiting_for#error: }" 2>/dev/null
+  notify-send -a "airboss" -u critical -i dialog-error "$label" "$MSG_ERROR${waiting_for#error: }" 2>/dev/null
 elif [[ "$state" == "idle" && "$prev" == "working" && "${AGENT_BOARD_NOTIFY_STOP:-1}" == "1" ]]; then
-  notify-send -a "Torre de Control" -u normal -t 8000 -i "$icon" "$label · terminó" "$(trunc "${last:-Turno completado}" 160)" 2>/dev/null
+  notify-send -a "airboss" -u normal -t 8000 -i "$icon" "$label · $MSG_DONE_SUFFIX" "$(trunc "${last:-$MSG_TURN_DONE}" 160)" 2>/dev/null
 elif [[ "$state" == "done" && "$prev" != "done" ]]; then
-  notify-send -a "Torre de Control" -u low -t 5000 -i "$icon" "$label" "Sesión cerrada" 2>/dev/null
+  notify-send -a "airboss" -u low -t 5000 -i "$icon" "$label" "$MSG_SESSION_CLOSED" 2>/dev/null
 fi
 exit 0

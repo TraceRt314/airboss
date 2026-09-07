@@ -2,7 +2,7 @@
   "agent": "claude",
   "session_id": "a1b2c3d4-0000-4000-8000-000000000001",
   "project": "nebula-api",
-  "cwd": "/home/tracert/Work/nebula-api",
+  "cwd": "/home/mia/Work/nebula-api",
   "type": "fix",
   "type_source": "name",
   "title": "nebula-api/fix: rate limit behind proxy",

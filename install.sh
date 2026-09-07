@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# torre installer: builds the TUI, links the scripts into ~/.local/bin, installs
+# airboss installer: builds the TUI, links the scripts into ~/.local/bin, installs
 # the systemd user timer and (optionally) registers the hooks in Claude Code and
 # Codex CLI. Idempotent; re-run after `git pull`.
 #
@@ -18,17 +18,17 @@ for dep in tmux notify-send hyprctl swaymsg; do
   command -v "$dep" >/dev/null || warn "optional: $dep not found"
 done
 
-say "building torre-tui"
+say "building airboss-tui"
 mkdir -p "$BIN"
-( cd "$HERE" && go build -ldflags "-X main.version=$(git -C "$HERE" describe --tags --always --dirty 2>/dev/null || echo dev)" -o "$BIN/torre-tui" . )
+( cd "$HERE" && go build -ldflags "-X main.version=$(git -C "$HERE" describe --tags --always --dirty 2>/dev/null || echo dev)" -o "$BIN/airboss-tui" . )
 
 say "linking scripts into $BIN"
-for s in agent-event agent-board-sync agent-title torre torre-focus torre-tmux-segment; do
+for s in agent-event agent-board-sync agent-title airboss airboss-focus airboss-tmux-segment; do
   ln -sfn "$HERE/scripts/$s" "$BIN/$s"
 done
 
-mkdir -p "$HOME/.local/state/agent-board/sessions" "$HOME/.config/torre"
-[ -f "$HOME/.config/torre/config.toml" ] || cp "$HERE/config.example.toml" "$HOME/.config/torre/config.toml"
+mkdir -p "$HOME/.local/state/agent-board/sessions" "$HOME/.config/airboss"
+[ -f "$HOME/.config/airboss/config.toml" ] || cp "$HERE/config.example.toml" "$HOME/.config/airboss/config.toml"
 
 if command -v systemctl >/dev/null && [ -d /run/systemd/system ]; then
   say "installing systemd user timer (agent-board-sync every 5 s)"
@@ -66,4 +66,4 @@ if [ "${1:-}" = "--hooks" ]; then
   fi
 fi
 
-say "done. Run: torre   (or bind it: Hyprland  o.bind(\"SUPER + F1\", \"torre\", { tui = \"torre\", focus = true }))"
+say "done. Run: airboss   (or bind it: Hyprland  o.bind(\"SUPER + F1\", \"airboss\", { tui = \"airboss\", focus = true }))"

@@ -1,4 +1,4 @@
-# torre theme: tokyo-night. Same keys as Omarchy colors.toml.
+# airboss theme: tokyo-night. Same keys as Omarchy colors.toml.
 # Use with: [theme] source = "builtin", name = "tokyo-night"
 mode = "dark"
 accent = "#7aa2f7"

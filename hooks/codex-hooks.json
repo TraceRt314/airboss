@@ -1,5 +1,5 @@
 {
-  "description": "Torre de Control: estado por sesión, notificaciones y guardas (mismo agent-event que Claude Code)",
+  "description": "airboss: per-session state, notifications and guards (same agent-event as Claude Code)",
   "hooks": {
     "SessionStart":      [{ "hooks": [{ "type": "command", "command": "$HOME/.local/bin/agent-event codex", "timeout": 10 }] }],
     "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "$HOME/.local/bin/agent-event codex", "timeout": 10 }] }],

@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# agent-board-sync — reconcilia el estado de la Torre de Control con la realidad:
-#   - Claude: `claude agents --json` es la fuente autoritativa de estado, nombre y pid;
-#     crea fichas para sesiones abiertas antes de que existieran los hooks.
-#   - Codex: localiza el pid por cwd de los procesos `codex` vivos.
-#   - Marca `done` las sesiones cuyo proceso ya no existe.
-# Lo ejecuta un timer systemd --user cada 5 s y la propia TUI.
+# agent-board-sync — reconciles airboss state with reality:
+#   - Claude: `claude agents --json` is the authoritative source for state, name and pid;
+#     creates entries for sessions opened before the hooks existed.
+#   - Codex: locates the pid by cwd among live `codex` processes.
+#   - Marks `done` the sessions whose process no longer exists.
+# Run by a systemd --user timer every 5s, and by the TUI itself.
 set -u
 export LC_ALL=C.UTF-8
 STATE_DIR="${AGENT_BOARD_DIR:-$HOME/.local/state/agent-board}"
 SESS_DIR="$STATE_DIR/sessions"
 mkdir -p "$SESS_DIR"
-# un solo sync a la vez: el timer y la TUI pueden coincidir y pisarse los ficheros
+# only one sync at a time: the timer and the TUI can overlap and clobber files
 exec 8>"$STATE_DIR/sync.lock"; flock -n 8 || exit 0
 TMP=".tmp.$$"
 now=$(date +%s)
@@ -22,12 +22,12 @@ if [[ -n "${CLAUDE_BIN:-}" ]]; then
   jq -e 'type=="array"' >/dev/null 2>&1 <<<"$agents" || agents='[]'
 fi
 
-# pid → target tmux (#S:#I.#P) para procesos que viven en un pane
+# pid → tmux target (#S:#I.#P) for processes that live in a pane
 declare -A PANE_OF
 if tmux info >/dev/null 2>&1; then
   while IFS=$'\t' read -r ppid target; do PANE_OF[$ppid]="$target"; done < <(tmux list-panes -a -F $'#{pane_pid}\t#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null)
 fi
-pane_for_pid() { # sube por los padres hasta dar con el pid del pane
+pane_for_pid() { # walk up the parents until the pane's pid is found
   local p="$1" i
   for i in 1 2 3 4 5 6; do
     [[ -z "$p" || "$p" == 1 ]] && break
@@ -36,20 +36,20 @@ pane_for_pid() { # sube por los padres hasta dar con el pid del pane
   done
 }
 
-# ── Claude: sesiones vivas según el propio CLI ─────────────────────────────
+# ── Claude: live sessions per the CLI itself ────────────────────────────────
 while IFS= read -r row; do
   [[ -z "$row" ]] && continue
   sid=$(jq -r '.sessionId // empty' <<<"$row"); [[ -z "$sid" ]] && continue
   pid=$(jq -r '.pid // empty' <<<"$row"); st=$(jq -r '.status // empty' <<<"$row")
   name=$(jq -r '.name // empty' <<<"$row"); cwd=$(jq -r '.cwd // empty' <<<"$row"); kind=$(jq -r '.kind // "interactive"' <<<"$row")
-  # sesiones internas de plugins (observer de claude-mem) no son tuyas: fuera
+  # internal plugin sessions (claude-mem observer) aren't yours: skip
   [[ "$cwd" == *"/.claude-mem/"* ]] && continue
   case "$st" in busy) state=working ;; waiting) state=waiting ;; idle) state=idle ;; *) state="" ;; esac
   file="$SESS_DIR/claude-$sid.json"
   if [[ -f "$file" ]]; then
     old=$(cat "$file")
   else
-    # sesión anterior a los hooks: ficha mínima
+    # session predating the hooks: minimal entry
     if [[ "$cwd" == "$HOME" ]]; then project="home"; else root=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null); project=$(basename "${root:-$cwd}"); fi
     type="impl"; tsrc="auto"
     [[ "$name" =~ ^[a-zA-Z0-9_.-]+/(impl|plan|fix|review|ops|doc)(:|[[:space:]]|$) ]] && { type="${BASH_REMATCH[1]}"; tsrc="name"; }
@@ -58,7 +58,7 @@ while IFS= read -r row; do
   fi
   target=""; [[ -n "$pid" ]] && target=$(pane_for_pid "$pid")
   hook_state=$(jq -r '.state // empty' <<<"$old"); hook_wf=$(jq -r '.waiting_for // empty' <<<"$old")
-  # el hook es más preciso cuando dice "waiting" y el CLI aún no lo refleja; en lo demás manda el CLI
+  # the hook is more precise when it says "waiting" and the CLI doesn't yet reflect it; otherwise the CLI wins
   final="$state"; wf="$hook_wf"
   [[ -z "$final" ]] && final="${hook_state:-idle}"
   [[ "$hook_state" == "waiting" && "$state" == "busy" ]] && final="waiting"
@@ -68,7 +68,7 @@ while IFS= read -r row; do
       | .kind=$kind | .pid=$pid | .tmux_target=(if $tt != "" then $tt else .tmux_target end) | .synced=$now' <<<"$old" > "$file$TMP" && mv "$file$TMP" "$file"
 done < <(jq -c '.[]' <<<"$agents" 2>/dev/null)
 
-# ── fichas sin título (creadas por sync): objetivo desde el transcript y título ──
+# ── entries without a title (created by sync): goal from the transcript, then title ──
 for f in "$SESS_DIR"/claude-*.json; do
   [[ -f "$f" ]] || continue
   if [[ "$(jq -r '.bootstrapped // 0' "$f")" != "1" && "$(jq -r '.title // empty' "$f")" == "" ]]; then
@@ -76,14 +76,14 @@ for f in "$SESS_DIR"/claude-*.json; do
   fi
 done
 
-# ── Codex: pid por cwd de procesos vivos ───────────────────────────────────
+# ── Codex: pid by cwd of live processes ─────────────────────────────────────
 declare -A CODEX_PID_BY_CWD
 while read -r cpid; do
   c=$(readlink -f "/proc/$cpid/cwd" 2>/dev/null); [[ -n "$c" ]] && CODEX_PID_BY_CWD[$c]="$cpid"
 done < <(pgrep -x codex 2>/dev/null)
 
-# ── Codex: fichas para procesos vivos sin ficha (sesiones anteriores a hooks.json,
-#    que nunca disparan hooks). El rollout abierto en /proc/<pid>/fd da el id. ──
+# ── Codex: entries for live processes without one (sessions predating hooks.json,
+#    which never fire hooks). The rollout open in /proc/<pid>/fd gives the id. ──
 while read -r cpid; do
   roll=$(ls -l "/proc/$cpid/fd" 2>/dev/null | grep -o '[^ ]*/\.codex/sessions/[^ ]*rollout-[^ ]*\.jsonl' | head -1)
   [[ -z "$roll" ]] && continue
@@ -110,11 +110,12 @@ while read -r cpid; do
         goal:$goal, last_message:"", transcript_path:$tp, subagents:0, turns:0, started:$started, state:"idle", kind:"interactive", pid:$pid,
         source:"sync", hookless:1, bootstrapped:1}' > "$file$TMP" && mv "$file$TMP" "$file"
   fi
-  # estado por el rollout, como `claude agents` para Claude: un turno abierto
-  # (último task_started sin task_complete) es "working" aunque lleve minutos sin
-  # escribir; "waiting" lo pone el hook de permiso y se respeta mientras dure el turno.
-  # Lectura incremental: solo lo añadido desde la última pasada (el rollout crece
-  # cientos de MB en sesiones largas); la primera vez se recorre entero.
+  # state from the rollout, like `claude agents` for Claude: an open turn
+  # (last task_started with no task_complete) is "working" even if it hasn't
+  # written for minutes; "waiting" is set by the permission hook and honored for
+  # the rest of the turn. Incremental read: only what was appended since the last
+  # pass (the rollout can grow to hundreds of MB in long sessions); the first
+  # pass reads it in full.
   size=$(stat -c %s "$roll" 2>/dev/null || echo 0)
   read -r off lastev cur < <(jq -r '"\(.roll_off // 0) \(.roll_last // "-") \(.state // "-")"' "$file")
   (( off > size )) && off=0
@@ -130,7 +131,7 @@ while read -r cpid; do
       | .roll_off=$off | .roll_last=$le' "$file" > "$file$TMP" && mv "$file$TMP" "$file"
 done < <(pgrep -x codex 2>/dev/null)
 
-# ── Sesiones cuyo proceso ya no existe → done ─────────────────────────────
+# ── Sessions whose process no longer exists → done ─────────────────────────
 live_ids=$(jq -r '.[].sessionId' <<<"$agents" 2>/dev/null)
 for f in "$SESS_DIR"/*.json; do
   [[ -f "$f" ]] && jq -e . "$f" >/dev/null 2>&1 || continue
@@ -139,7 +140,7 @@ for f in "$SESS_DIR"/*.json; do
   if [[ "$agent" == "claude" ]]; then
     grep -qx -- "$sid" <<<"$live_ids" && continue
     upd=$(jq -r '.updated // .started // 0' "$f")
-    # margen de 20 s: una sesión recién creada por hook puede no estar aún en la lista
+    # 20s grace period: a session just created by a hook may not be in the list yet
     (( now - upd < 20 )) && continue
     jq --argjson now "$now" '.state="done" | .waiting_for=null | .synced=$now' "$f" > "$f$TMP" && mv "$f$TMP" "$f"
   else
@@ -155,7 +156,7 @@ for f in "$SESS_DIR"/*.json; do
   fi
 done
 
-# ── Resumen para starship / tmux ───────────────────────────────────────────
+# ── Summary for starship / tmux ─────────────────────────────────────────────
 jq -s '{total: (map(select(.state!="done"))|length), waiting: (map(select(.state=="waiting"))|length),
         working: (map(select(.state=="working"))|length), ts: now|floor}' "$SESS_DIR"/*.json 2>/dev/null > "$STATE_DIR/summary.json.tmp" \
   && mv "$STATE_DIR/summary.json.tmp" "$STATE_DIR/summary.json"

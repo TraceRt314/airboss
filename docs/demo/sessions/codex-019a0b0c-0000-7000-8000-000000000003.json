@@ -2,7 +2,7 @@
   "agent": "codex",
   "session_id": "019a0b0c-0000-7000-8000-000000000003",
   "project": "storefront",
-  "cwd": "/home/tracert/Work/storefront",
+  "cwd": "/home/mia/Work/storefront",
   "type": "ops",
   "type_source": "name",
   "title": "storefront/ops: cloudflare access for admin",

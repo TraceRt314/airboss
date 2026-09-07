@@ -119,7 +119,7 @@ func spin() tea.Cmd {
 func syncBin() string { return filepath.Join(os.Getenv("HOME"), ".local/bin/agent-board-sync") }
 
 func syncCmd() tea.Cmd {
-	if os.Getenv("TORRE_NO_SYNC") != "" { // demos y capturas: solo las fichas del directorio
+	if os.Getenv("AIRBOSS_NO_SYNC") != "" { // demos and screenshots: only the files already in the directory
 		return func() tea.Msg { return syncMsg{} }
 	}
 	return func() tea.Msg { return syncMsg{err: exec.Command(syncBin()).Run()} }
@@ -397,7 +397,7 @@ func (m model) launchNew() (tea.Model, tea.Cmd) {
 		m.setStatus(T("need_tmux"))
 		return m, nil
 	}
-	// claude --name pone el título en formato Torre desde el primer segundo
+	// claude --name sets the title in airboss format from the very first second
 	launch := "claude --name " + shellQuote(name)
 	if _, err := exec.LookPath("cl"); err == nil {
 		typ, desc := "impl", name
@@ -416,7 +416,7 @@ func (m model) launchNew() (tea.Model, tea.Cmd) {
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-// ── helpers de texto ────────────────────────────────────────────────────────
+// ── text helpers ────────────────────────────────────────────────────────────
 func trunc(s string, n int) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	if n <= 1 {
@@ -492,7 +492,7 @@ func agentIcon(a string) string {
 	return ic("app")
 }
 
-// ── vista ───────────────────────────────────────────────────────────────────
+// ── view ────────────────────────────────────────────────────────────────────
 func (m model) View() string {
 	cfg := m.cfg
 	dim := lipgloss.NewStyle().Foreground(c("dark_foreground"))
@@ -507,7 +507,7 @@ func (m model) View() string {
 		return m.helpView()
 	}
 
-	// ── cabecera ──
+	// ── header ──
 	nAct, nWait, nWork := 0, 0, 0
 	for _, s := range m.sessions {
 		if s.State != "done" {
@@ -555,7 +555,7 @@ func (m model) View() string {
 	b.WriteString("\n" + left + strings.Repeat(" ", gap) + right + syncTxt + "\n")
 	b.WriteString(mut.Render(" "+strings.Repeat("─", w-2)) + "\n")
 
-	// ── lista ──
+	// ── list ──
 	detailH := 0
 	if cfg.UI.Details {
 		detailH = cfg.UI.DetailLines + 2
@@ -592,8 +592,8 @@ func (m model) View() string {
 			selLine = len(lines)
 		}
 		bgc := c("lighter_background")
-		// con la fila seleccionada cada segmento lleva el fondo: lipgloss no lo
-		// propaga a través de los resets de los estilos anidados
+		// with the row selected, every segment carries its own background: lipgloss
+		// doesn't propagate it across the resets of nested styles
 		S := func(st lipgloss.Style) lipgloss.Style {
 			if sel {
 				return st.Background(bgc)
@@ -697,7 +697,7 @@ func (m model) View() string {
 		b.WriteString("\n")
 	}
 
-	// ── detalle ──
+	// ── detail ──
 	if cfg.UI.Details {
 		iw := w - 6
 		var det []string
@@ -769,9 +769,9 @@ func (m model) View() string {
 		b.WriteString(mut.Render(" "+bl+strings.Repeat(hz, w-4)+br) + "\n")
 	}
 
-	// ── pie ──
+	// ── footer ──
 	hint := func(k, t string) string { return key.Render(" "+k+" ") + dim.Render(" "+t) }
-	// tantas pistas como quepan (trunc por runas cortaría dentro de las secuencias ANSI)
+	// as many hints as fit (truncating by runes would cut into the ANSI sequences)
 	foot := " "
 	for _, h := range []string{
 		hint("↵", T("k_go")), hint("a", T("k_attach")), hint("n", T("k_new")), hint("r", T("k_rename")), hint("t", T("k_type")),

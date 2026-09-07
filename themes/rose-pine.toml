@@ -1,4 +1,4 @@
-# torre theme: rose-pine. Same keys as Omarchy colors.toml.
+# airboss theme: rose-pine. Same keys as Omarchy colors.toml.
 # Use with: [theme] source = "builtin", name = "rose-pine"
 mode = "dark"
 accent = "#c4a7e7"

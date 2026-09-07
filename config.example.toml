@@ -1,5 +1,5 @@
-# torre — ~/.config/torre/config.toml
-# Everything is optional. Without this file torre follows the active Omarchy
+# airboss — ~/.config/airboss/config.toml
+# Everything is optional. Without this file airboss follows the active Omarchy
 # theme (if present), falls back to catppuccin-mocha, and uses Nerd Font icons.
 
 [theme]
@@ -19,7 +19,7 @@ set = "nerd"               # nerd (Nerd Font v3) | unicode | ascii
 # app = "\uF0F7"
 
 [ui]
-title = "TORRE DE CONTROL"
+title = "AIRBOSS"
 lang = "es"                # es | en (default: from $LANG)
 show_goal = true           # second line per session with the goal and the window
 details = true             # detail box under the list
@@ -51,7 +51,7 @@ icon = "\uF0F6"
 color = "light_foreground"
 
 # Per project (key = directory name): icon, color, display label
-# [projects.prob-monorepo]
+# [projects.nebula-api]
 # icon = "\uE626"
 # color = "blue"
-# label = "Problyx"
+# label = "Nebula"

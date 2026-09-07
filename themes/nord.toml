@@ -1,4 +1,4 @@
-# torre theme: nord. Same keys as Omarchy colors.toml.
+# airboss theme: nord. Same keys as Omarchy colors.toml.
 # Use with: [theme] source = "builtin", name = "nord"
 mode = "dark"
 accent = "#88c0d0"

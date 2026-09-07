@@ -1,5 +1,5 @@
 [Unit]
-Description=Torre de Control: reconcilia el estado de las sesiones de Claude/Codex
+Description=airboss: reconciles Claude/Codex session state
 
 [Service]
 Type=oneshot

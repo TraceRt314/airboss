@@ -1,5 +1,5 @@
-// torre — Torre de Control: una TUI para ver qué hace cada sesión de Claude Code
-// y Codex CLI, saber cuál te espera y saltar a su terminal con una tecla.
+// airboss — a TUI to see what each Claude Code and Codex CLI session is
+// doing, know which one is waiting on you, and jump to its terminal with one key.
 package main
 
 import (
@@ -14,18 +14,18 @@ import (
 var version = "dev"
 
 func main() {
-	cfgPath := flag.String("config", "", "ruta de config.toml (por defecto ~/.config/torre/config.toml)")
-	theme := flag.String("theme", "", "tema builtin: catppuccin-mocha, tokyo-night, gruvbox-dark, nord, dracula, rose-pine, everforest, kanagawa, catppuccin-latte")
-	iconSet := flag.String("icons", "", "juego de iconos: nerd | unicode | ascii")
-	lng := flag.String("lang", "", "idioma: es | en")
-	showVersion := flag.Bool("version", false, "versión")
+	cfgPath := flag.String("config", "", "path to config.toml (default ~/.config/airboss/config.toml)")
+	theme := flag.String("theme", "", "builtin theme: catppuccin-mocha, tokyo-night, gruvbox-dark, nord, dracula, rose-pine, everforest, kanagawa, catppuccin-latte")
+	iconSet := flag.String("icons", "", "icon set: nerd | unicode | ascii")
+	lng := flag.String("lang", "", "language: es | en")
+	showVersion := flag.Bool("version", false, "show version")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "torre-tui %s\n\nuso: torre-tui [flags] [sync | color <clave> | themes]\n\n", version)
+		fmt.Fprintf(os.Stderr, "airboss-tui %s\n\nusage: airboss-tui [flags] [sync | color <key> | themes]\n\n", version)
 		flag.PrintDefaults()
 	}
 	flag.Parse()
 	if *showVersion {
-		fmt.Println("torre-tui", version)
+		fmt.Println("airboss-tui", version)
 		return
 	}
 	cfg, err := loadConfig(*cfgPath)
@@ -50,7 +50,7 @@ func main() {
 	case "sync":
 		exec.Command(syncBin()).Run()
 		return
-	case "color": // torre-tui color accent → #89b4fa (para tmux, starship, scripts)
+	case "color": // airboss-tui color accent → #89b4fa (for tmux, starship, scripts)
 		fmt.Println(pal[flag.Arg(1)])
 		return
 	case "themes":

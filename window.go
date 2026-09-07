@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// window es una ventana del compositor (Hyprland o Sway) que aloja una sesión.
+// window is a compositor window (Hyprland or Sway) hosting a session.
 type window struct {
 	Address   string `json:"address"`
 	Pid       int    `json:"pid"`
@@ -29,8 +29,8 @@ func runOut(name string, args ...string) (string, error) {
 
 func hasCmd(name string) bool { _, err := exec.LookPath(name); return err == nil }
 
-// listWindows consulta el compositor disponible. Sin compositor conocido devuelve nil
-// y la Torre se apoya solo en tmux.
+// listWindows queries the available compositor. With no known compositor it returns
+// nil and airboss relies on tmux alone.
 func listWindows() []window {
 	if os.Getenv("HYPRLAND_INSTANCE_SIGNATURE") != "" && hasCmd("hyprctl") {
 		out, err := exec.Command("hyprctl", "clients", "-j").Output()
@@ -88,8 +88,8 @@ func swayWindows(tree []byte) []window {
 	return ws
 }
 
-// ppidOf lee el padre en /proc; el comm va entre paréntesis y puede llevar
-// espacios, así que se parsea a partir del último ")".
+// ppidOf reads the parent pid from /proc; comm is wrapped in parentheses and may
+// contain spaces, so it's parsed from the last ")".
 func ppidOf(pid int) int {
 	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
@@ -121,7 +121,7 @@ func windowOfPid(pid int, wins []window) *window {
 	return nil
 }
 
-// tmuxClientPid: pid del cliente tmux que muestra la sesión del target (#S:#I.#P).
+// tmuxClientPid: pid of the tmux client displaying the target's session (#S:#I.#P).
 func tmuxClientPid(target string) int {
 	sess, _, _ := strings.Cut(target, ":")
 	out, err := exec.Command("tmux", "list-clients", "-F", "#{client_pid} #{session_name}").Output()
@@ -145,7 +145,7 @@ func tmuxClientPid(target string) int {
 	return first
 }
 
-// resolveWindow: ancestros del pid, cliente tmux del pane, o título de ventana.
+// resolveWindow: pid ancestors, the pane's tmux client, or window title.
 func resolveWindow(s *Session, wins []window) *window {
 	if len(wins) == 0 {
 		return nil
@@ -175,8 +175,8 @@ func resolveWindow(s *Session, wins []window) *window {
 	return nil
 }
 
-// focusWindow enfoca la ventana en el compositor. Hyprland ≥0.56 recibe Lua en
-// dispatch; el formato clásico queda de reserva para versiones anteriores.
+// focusWindow focuses the window in the compositor. Hyprland ≥0.56 accepts Lua in
+// dispatch; the classic format is kept as a fallback for older versions.
 func focusWindow(w *window) error {
 	switch w.backend {
 	case "hyprland":
@@ -197,7 +197,7 @@ func focusWindow(w *window) error {
 	return fmt.Errorf("unknown backend")
 }
 
-// focusTmux cambia el cliente, la ventana y el pane de un target #S:#I.#P.
+// focusTmux switches the client, window and pane for a #S:#I.#P target.
 func focusTmux(target string) {
 	if target == "" || !hasCmd("tmux") {
 		return

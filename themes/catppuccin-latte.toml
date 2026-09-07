@@ -1,4 +1,4 @@
-# torre theme: catppuccin-latte. Same keys as Omarchy colors.toml.
+# airboss theme: catppuccin-latte. Same keys as Omarchy colors.toml.
 # Use with: [theme] source = "builtin", name = "catppuccin-latte"
 mode = "light"
 accent = "#1e66f5"

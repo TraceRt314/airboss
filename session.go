@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// Session es la ficha que escriben agent-event y agent-board-sync en
+// Session is the record written by agent-event and agent-board-sync to
 // $AGENT_BOARD_DIR/sessions/<agent>-<id>.json.
 type Session struct {
 	Agent      string  `json:"agent"`
@@ -76,7 +76,7 @@ func loadSessions(dir string) []Session {
 	return ss
 }
 
-// shortName: la descripción sin el prefijo proyecto/tipo:.
+// shortName: the description without the project/type: prefix.
 func shortName(s *Session) string {
 	name := s.Title
 	if name == "" {
@@ -97,8 +97,8 @@ type row struct {
 	session *Session
 }
 
-// buildRows agrupa por proyecto (los que tienen alguien esperando, primero) y
-// dentro por estado y actividad.
+// buildRows groups by project (ones with someone waiting come first) and
+// within each project by state and activity.
 func buildRows(sessions []Session, showDone bool, filter string) []row {
 	var vis []Session
 	for _, s := range sessions {
@@ -150,7 +150,7 @@ func buildRows(sessions []Session, showDone bool, filter string) []row {
 	return rows
 }
 
-// ── icono de proyecto: config > detección por ficheros del directorio ───────
+// ── project icon: config > detection by files in the directory ─────────────
 var projectIconCache = map[string]string{}
 
 func projectIcon(cfg *Config, project, cwd string) string {

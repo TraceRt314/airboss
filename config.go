@@ -8,8 +8,8 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// Config es ~/.config/torre/config.toml. Todo tiene valor por defecto: sin
-// fichero, la Torre sigue el tema de Omarchy si existe y usa iconos Nerd Font.
+// Config is ~/.config/airboss/config.toml. Everything has a default: with no
+// file, airboss follows the Omarchy theme if present and uses Nerd Font icons.
 type Config struct {
 	Theme    ThemeConfig              `toml:"theme"`
 	Icons    IconConfig               `toml:"icons"`
@@ -20,7 +20,7 @@ type Config struct {
 
 type ThemeConfig struct {
 	Source string            `toml:"source"` // auto | omarchy | builtin
-	Name   string            `toml:"name"`   // tema builtin (ver themes/)
+	Name   string            `toml:"name"`   // builtin theme (see themes/)
 	Colors map[string]string `toml:"colors"` // overrides: accent = "#ff79c6"
 }
 
@@ -56,7 +56,7 @@ type ProjectConfig struct {
 
 func defaultConfig() Config {
 	lang := "en"
-	for _, v := range []string{os.Getenv("TORRE_LANG"), os.Getenv("LC_ALL"), os.Getenv("LC_MESSAGES"), os.Getenv("LANG")} {
+	for _, v := range []string{os.Getenv("AIRBOSS_LANG"), os.Getenv("LC_ALL"), os.Getenv("LC_MESSAGES"), os.Getenv("LANG")} {
 		if v != "" {
 			if strings.HasPrefix(v, "es") {
 				lang = "es"
@@ -68,21 +68,21 @@ func defaultConfig() Config {
 		Theme: ThemeConfig{Source: "auto", Name: "catppuccin-mocha"},
 		Icons: IconConfig{Set: "nerd"},
 		UI: UIConfig{
-			Title: "TORRE DE CONTROL", Lang: lang, ShowGoal: true, Details: true, DetailLines: 5,
+			Title: "AIRBOSS", Lang: lang, ShowGoal: true, Details: true, DetailLines: 5,
 			Border: "rounded", TickSeconds: 2, NameWidth: 44, Spinner: "braille",
 		},
 	}
 }
 
 func configPath() string {
-	if p := os.Getenv("TORRE_CONFIG"); p != "" {
+	if p := os.Getenv("AIRBOSS_CONFIG"); p != "" {
 		return p
 	}
 	base := os.Getenv("XDG_CONFIG_HOME")
 	if base == "" {
 		base = filepath.Join(os.Getenv("HOME"), ".config")
 	}
-	return filepath.Join(base, "torre", "config.toml")
+	return filepath.Join(base, "airboss", "config.toml")
 }
 
 func loadConfig(path string) (Config, error) {
@@ -112,9 +112,9 @@ func loadConfig(path string) (Config, error) {
 	return cfg, nil
 }
 
-// ── iconos ──────────────────────────────────────────────────────────────────
-// Tres juegos: nerd (Nerd Font v3, el que se ve en r/unixporn), unicode (cualquier
-// fuente) y ascii (terminales sin unicode). Cada clave se puede sobreescribir en
+// ── icons ───────────────────────────────────────────────────────────────────
+// Three sets: nerd (Nerd Font v3, the kind seen on r/unixporn), unicode (any
+// font) and ascii (terminals without unicode). Each key can be overridden in
 // [icons.override].
 var iconSets = map[string]map[string]string{
 	"nerd": {
@@ -171,7 +171,7 @@ func loadIcons(cfg IconConfig) {
 
 func ic(name string) string { return icons[name] }
 
-// icf: icono seguido de espacio si el icono no está vacío.
+// icf: icon followed by a space if the icon is not empty.
 func icf(name string) string {
 	if v := icons[name]; v != "" {
 		return v + " "
@@ -179,7 +179,7 @@ func icf(name string) string {
 	return ""
 }
 
-// ── textos (es/en) ──────────────────────────────────────────────────────────
+// ── text tables (es/en) ─────────────────────────────────────────────────────
 var lang = "en"
 
 var texts = map[string]map[string]string{

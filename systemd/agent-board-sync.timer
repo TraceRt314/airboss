@@ -1,5 +1,5 @@
 [Unit]
-Description=Torre de Control: sync cada 5 s
+Description=airboss: sync every 5s
 
 [Timer]
 OnBootSec=20s

@@ -2,7 +2,7 @@
   "agent": "claude",
   "session_id": "a1b2c3d4-0000-4000-8000-000000000004",
   "project": "storefront",
-  "cwd": "/home/tracert/Work/storefront",
+  "cwd": "/home/mia/Work/storefront",
   "type": "review",
   "type_source": "model",
   "title": "storefront/review: checkout accessibility pass",

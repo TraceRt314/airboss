@@ -1,4 +1,4 @@
-module github.com/TraceRt314/torre
+module github.com/TraceRt314/airboss
 
 go 1.25
 

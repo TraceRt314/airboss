@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# torre-focus <pid> [tmux_target] — lleva el foco a la terminal donde vive una sesión.
-#   1. Si hay Hyprland: enfoca la ventana (foot/kitty/...) ancestro del pid.
-#   2. Si hay tmux_target (sesión:ventana.pane): cambia a esa ventana y pane.
+# airboss-focus <pid> [tmux_target] — brings focus to the terminal where a session lives.
+#   1. If Hyprland is present: focuses the window (foot/kitty/...) that is an ancestor of the pid.
+#   2. If tmux_target (session:window.pane) is given: switches to that window and pane.
 set -u
 dry=0; [[ "${1:-}" == "--dry-run" ]] && { dry=1; shift; }
 pid="${1:-}"; target="${2:-}"
@@ -14,15 +14,15 @@ if [[ -n "$pid" ]] && command -v hyprctl >/dev/null 2>&1; then
     [[ -z "$p" || "$p" == 1 ]] && break
     for w in "${winpids[@]}"; do
       if [[ "$w" == "$p" ]]; then
-        if (( dry )); then echo "ventana Hyprland: pid $p ($(hyprctl clients -j | jq -r --argjson p "$p" '.[] | select(.pid==$p) | .class + " · " + .title'))"
+        if (( dry )); then echo "Hyprland window: pid $p ($(hyprctl clients -j | jq -r --argjson p "$p" '.[] | select(.pid==$p) | .class + " · " + .title'))"
         else hyprctl dispatch "hl.dsp.focus({ window = \"pid:$p\" })" >/dev/null 2>&1 || hyprctl dispatch focuswindow "pid:$p" >/dev/null 2>&1; fi
         p=""; break 2
       fi
     done
-    # ppid: campo tras el ")" que cierra el comm (el comm puede llevar espacios)
+    # ppid: field after the ")" that closes comm (comm may contain spaces)
     p=$(sed -E 's/^.*\) [A-Za-z] ([0-9]+).*/\1/' "/proc/$p/stat" 2>/dev/null)
   done
-  (( dry )) && [[ -n "$p" ]] && echo "sin ventana Hyprland para pid $pid"
+  (( dry )) && [[ -n "$p" ]] && echo "no Hyprland window for pid $pid"
 fi
 (( dry )) && { [[ -n "$target" ]] && echo "tmux: $target"; exit 0; }
 
@@ -31,7 +31,7 @@ if [[ -n "$target" ]] && tmux info >/dev/null 2>&1; then
   if [[ -n "${TMUX:-}" ]]; then
     tmux switch-client -t "$sess" 2>/dev/null
   else
-    # desde fuera de tmux: cambia el cliente que tenga esa sesión (o el más reciente)
+    # from outside tmux: switch the client that has that session (or the most recent one)
     client=$(tmux list-clients -F '#{client_name} #{session_name}' 2>/dev/null | awk -v s="$sess" '$2==s{print $1; exit}')
     [[ -z "$client" ]] && client=$(tmux list-clients -F '#{client_name}' 2>/dev/null | head -1)
     [[ -n "$client" ]] && tmux switch-client -c "$client" -t "$sess" 2>/dev/null

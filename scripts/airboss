@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# airboss — opens the TUI. Inside tmux it lives in its own "airboss" window.
+if [[ -n "${TMUX:-}" && "${1:-}" != "--here" ]]; then
+  if tmux list-windows -F '#W' | grep -qx airboss; then tmux select-window -t airboss
+  else tmux new-window -n airboss "$HOME/.local/bin/airboss-tui"; fi
+else
+  exec "$HOME/.local/bin/airboss-tui" "$@"
+fi
