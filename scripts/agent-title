@@ -4,7 +4,13 @@
 # to Claude's session file (claude agents, statusline), and to the transcript (/resume).
 # agent-event spawns it in the background the first time there is a goal.
 set -u
-export LC_ALL=C.UTF-8 AGENT_BOARD_INTERNAL=1
+_ab_dir="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+for _c in "$_ab_dir/lib-airboss.sh" "$HOME/.local/bin/lib-airboss.sh"; do
+  [ -r "$_c" ] && { . "$_c"; break; }
+done
+command -v ab_lock >/dev/null 2>&1 || { echo "airboss: lib-airboss.sh not found" >&2; exit 1; }
+ab_setlocale
+export AGENT_BOARD_INTERNAL=1
 file="${1:-}"; [[ -f "$file" ]] || exit 0
 goal=$(jq -r '.goal // empty' "$file"); project=$(jq -r '.project // "project"' "$file")
 [[ -z "$goal" ]] && exit 0
@@ -24,21 +30,21 @@ and description is 3 to 6 words in ${lang_name}, lowercase, no quotes and no tra
 
 Message: \"\"\"${goal:0:800}\"\"\""
 
-out=$(timeout 90 "$CLAUDE_BIN" -p --model haiku --settings '{"disableAllHooks":true}' --no-session-persistence --max-turns 1 "$prompt" </dev/null 2>/dev/null | grep -E '^(impl|plan|fix|review|ops|doc):' | tail -1)
+out=$(ab_timeout 90 "$CLAUDE_BIN" -p --model haiku --settings '{"disableAllHooks":true}' --no-session-persistence --max-turns 1 "$prompt" </dev/null 2>/dev/null | grep -E '^(impl|plan|fix|review|ops|doc):' | tail -1)
 [[ "$out" =~ ^(impl|plan|fix|review|ops|doc):[[:space:]]*(.+)$ ]] || exit 0
 type="${BASH_REMATCH[1]}"; desc="${BASH_REMATCH[2]}"
 desc="${desc%%[.\"\']}"; desc="${desc#\"}"; desc="${desc:0:60}"
 
-exec 9>"$file.lock"; flock -w 5 9 || exit 0
-[[ -f "$file" ]] || exit 0
+ab_lock "$file" 5 || exit 0
+[[ -f "$file" ]] || { ab_unlock "$file"; exit 0; }
 src=$(jq -r '.title_source // empty' "$file")
 # if the user set a name meanwhile, the user wins
-[[ "$src" == "name" || "$src" == "user" ]] && exit 0
+[[ "$src" == "name" || "$src" == "user" ]] && { ab_unlock "$file"; exit 0; }
 jq --arg t "$project/$type: $desc" --arg ty "$type" \
    '.title=$t | .title_source="model" | .title_pending=0
     | .type=(if .type_source=="name" or .type_source=="user" then .type else $ty end)
     | .type_source=(if .type_source=="name" or .type_source=="user" then .type_source else "model" end)' \
    "$file" > "$file.tmp" && mv "$file.tmp" "$file"
-flock -u 9
+ab_unlock "$file"
 "$HOME/.local/bin/agent-event" apply-title "$file"
 exit 0

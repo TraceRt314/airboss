@@ -1,15 +1,16 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
 
-// window is a compositor window (Hyprland or Sway) hosting a session.
+// window is a terminal window hosting a session: a compositor client on
+// Linux (Hyprland, Sway), a terminal-emulator window or tab on macOS.
 type window struct {
 	Address   string `json:"address"`
 	Pid       int    `json:"pid"`
@@ -19,7 +20,8 @@ type window struct {
 		ID   int    `json:"id"`
 		Name string `json:"name"`
 	} `json:"workspace"`
-	backend string // hyprland | sway
+	backend string // hyprland | sway | macos
+	tty     string // macOS: the tab's tty, the only reliable pid→tab mapping
 }
 
 func runOut(name string, args ...string) (string, error) {
@@ -29,83 +31,26 @@ func runOut(name string, args ...string) (string, error) {
 
 func hasCmd(name string) bool { _, err := exec.LookPath(name); return err == nil }
 
-// listWindows queries the available compositor. With no known compositor it returns
-// nil and airboss relies on tmux alone.
-func listWindows() []window {
-	if os.Getenv("HYPRLAND_INSTANCE_SIGNATURE") != "" && hasCmd("hyprctl") {
-		out, err := exec.Command("hyprctl", "clients", "-j").Output()
-		if err == nil {
-			var ws []window
-			if json.Unmarshal(out, &ws) == nil {
-				for i := range ws {
-					ws[i].backend = "hyprland"
-				}
-				return ws
-			}
+// helperPath finds one of the airboss shell helpers: installed next to the
+// binary in ~/.local/bin, alongside a binary built in the repo, or on PATH.
+func helperPath(name string) string {
+	var cands []string
+	if home := os.Getenv("HOME"); home != "" {
+		cands = append(cands, filepath.Join(home, ".local/bin", name))
+	}
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		cands = append(cands, filepath.Join(dir, name), filepath.Join(dir, "scripts", name))
+	}
+	for _, c := range cands {
+		if st, err := os.Stat(c); err == nil && !st.IsDir() && st.Mode()&0o111 != 0 {
+			return c
 		}
 	}
-	if os.Getenv("SWAYSOCK") != "" && hasCmd("swaymsg") {
-		out, err := exec.Command("swaymsg", "-t", "get_tree").Output()
-		if err == nil {
-			return swayWindows(out)
-		}
+	if p, err := exec.LookPath(name); err == nil {
+		return p
 	}
-	return nil
-}
-
-func swayWindows(tree []byte) []window {
-	var root map[string]any
-	if json.Unmarshal(tree, &root) != nil {
-		return nil
-	}
-	var ws []window
-	var walk func(n map[string]any, wsName string)
-	walk = func(n map[string]any, wsName string) {
-		if t, _ := n["type"].(string); t == "workspace" {
-			wsName, _ = n["name"].(string)
-		}
-		if pid, ok := n["pid"].(float64); ok && pid > 0 {
-			w := window{Pid: int(pid), backend: "sway"}
-			w.Title, _ = n["name"].(string)
-			w.Class, _ = n["app_id"].(string)
-			if id, ok := n["id"].(float64); ok {
-				w.Address = strconv.Itoa(int(id))
-			}
-			w.Workspace.Name = wsName
-			ws = append(ws, w)
-		}
-		for _, key := range []string{"nodes", "floating_nodes"} {
-			if kids, ok := n[key].([]any); ok {
-				for _, k := range kids {
-					if km, ok := k.(map[string]any); ok {
-						walk(km, wsName)
-					}
-				}
-			}
-		}
-	}
-	walk(root, "")
-	return ws
-}
-
-// ppidOf reads the parent pid from /proc; comm is wrapped in parentheses and may
-// contain spaces, so it's parsed from the last ")".
-func ppidOf(pid int) int {
-	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-	if err != nil {
-		return 0
-	}
-	s := string(b)
-	i := strings.LastIndex(s, ")")
-	if i < 0 {
-		return 0
-	}
-	f := strings.Fields(s[i+1:])
-	if len(f) < 2 {
-		return 0
-	}
-	pp, _ := strconv.Atoi(f[1])
-	return pp
+	return ""
 }
 
 func windowOfPid(pid int, wins []window) *window {
@@ -145,56 +90,46 @@ func tmuxClientPid(target string) int {
 	return first
 }
 
-// resolveWindow: pid ancestors, the pane's tmux client, or window title.
-func resolveWindow(s *Session, wins []window) *window {
-	if len(wins) == 0 {
-		return nil
+// tmuxClientTty: tty of the tmux client showing the target's session. Inside
+// tmux the agent's own tty is the pane's pty, which owns no terminal window;
+// the client's tty is the one the emulator knows about.
+func tmuxClientTty(target string) string {
+	sess, _, _ := strings.Cut(target, ":")
+	out, err := exec.Command("tmux", "list-clients", "-F", "#{client_tty} #{session_name}").Output()
+	if err != nil {
+		return ""
 	}
-	if s.Pid != nil && *s.Pid > 0 {
-		if w := windowOfPid(*s.Pid, wins); w != nil {
-			return w
-		}
-	}
-	if s.TmuxTarget != "" {
-		if pid := tmuxClientPid(s.TmuxTarget); pid > 0 {
-			if w := windowOfPid(pid, wins); w != nil {
-				return w
-			}
-		}
-	}
-	for _, needle := range []string{s.Title, s.Name, shortName(s)} {
-		if len(needle) < 6 {
+	first := ""
+	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		f := strings.Fields(l)
+		if len(f) < 2 {
 			continue
 		}
-		for i := range wins {
-			if strings.Contains(wins[i].Title, needle) {
-				return &wins[i]
-			}
+		if first == "" {
+			first = f[0]
+		}
+		if f[1] == sess {
+			return f[0]
 		}
 	}
-	return nil
+	return first
 }
 
-// focusWindow focuses the window in the compositor. Hyprland ≥0.56 accepts Lua in
-// dispatch; the classic format is kept as a fallback for older versions.
-func focusWindow(w *window) error {
-	switch w.backend {
-	case "hyprland":
-		lua := fmt.Sprintf(`hl.dsp.focus({ window = "address:%s" })`, w.Address)
-		if err := exec.Command("hyprctl", "dispatch", lua).Run(); err == nil {
-			return nil
-		}
-		if err := exec.Command("hyprctl", "dispatch", "focuswindow", "address:"+w.Address).Run(); err != nil {
-			return fmt.Errorf("hyprctl: %v", err)
-		}
-		return nil
-	case "sway":
-		if err := exec.Command("swaymsg", fmt.Sprintf("[con_id=%s] focus", w.Address)).Run(); err != nil {
-			return fmt.Errorf("swaymsg: %v", err)
-		}
-		return nil
+// ttyOfPid returns /dev/ttysNNN for a process attached to a terminal.
+func ttyOfPid(pid int) string {
+	out, err := runOut("ps", "-o", "tty=", "-p", strconv.Itoa(pid))
+	if err != nil {
+		return ""
 	}
-	return fmt.Errorf("unknown backend")
+	t := strings.TrimSpace(out)
+	switch t {
+	case "", "?", "??", "-":
+		return ""
+	}
+	if !strings.HasPrefix(t, "/dev/") {
+		t = "/dev/" + t
+	}
+	return t
 }
 
 // focusTmux switches the client, window and pane for a #S:#I.#P target.
@@ -233,5 +168,53 @@ func winLabel(w *window) string {
 	if w == nil {
 		return ""
 	}
-	return fmt.Sprintf("ws %s · %s · %s", w.Workspace.Name, w.Class, trunc(w.Title, 40))
+	parts := []string{}
+	if ws := w.Workspace.Name; ws != "" {
+		parts = append(parts, "ws "+ws)
+	}
+	if w.Class != "" {
+		parts = append(parts, w.Class)
+	}
+	if w.Title != "" {
+		parts = append(parts, trunc(w.Title, 40))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// printWindows dumps the terminal windows airboss can see and the one it would
+// jump to for each session: the fastest way to tell whether window resolution
+// works on a given desktop.
+func printWindows(cfg *Config) {
+	wins := listWindows()
+	fmt.Printf("windows (%d)\n", len(wins))
+	for i := range wins {
+		w := &wins[i]
+		tty := w.tty
+		if tty == "" {
+			tty = "-"
+		}
+		fmt.Printf("  %-10s addr=%-14s pid=%-7d tty=%-14s %s\n", w.backend, w.Address, w.Pid, tty, trunc(w.Title, 50))
+	}
+	ss := loadSessions(stateDir(cfg))
+	fmt.Printf("\nsessions (%d)\n", len(ss))
+	for i := range ss {
+		s := &ss[i]
+		pid := 0
+		if s.Pid != nil {
+			pid = *s.Pid
+		}
+		target := resolveWindow(s, wins)
+		where := "— no window"
+		if target != nil {
+			where = "→ " + winLabel(target)
+		}
+		fmt.Printf("  %-8s %-44s pid=%-7d tmux=%-12s %s\n", s.State, trunc(shortName(s), 42), pid, orDash(s.TmuxTarget), where)
+	}
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }

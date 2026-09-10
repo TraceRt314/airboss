@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # agent-event — normalizes Claude Code and Codex CLI hook events into a per-session
 # state file at ~/.local/state/agent-board/sessions/<agent>-<id>.json, sets the
-# canonical title "project/type: description", and notifies via notify-send on the
+# canonical title "project/type: description", and sends a desktop notification on the
 # transitions that matter (waiting, error, turn done).
 #
 #   agent-event claude              JSON on stdin (Claude Code hooks)
@@ -13,7 +13,12 @@
 #            AGENT_BOARD_NOTIFY_STOP=0 (don't notify when each turn ends),
 #            AGENT_BOARD_INTERNAL=1 (internal session, e.g. the classifier: ignore).
 set -u
-export LC_ALL=C.UTF-8
+_ab_dir="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+for _c in "$_ab_dir/lib-airboss.sh" "$HOME/.local/bin/lib-airboss.sh"; do
+  [ -r "$_c" ] && { . "$_c"; break; }
+done
+command -v ab_lock >/dev/null 2>&1 || { echo "airboss: lib-airboss.sh not found" >&2; exit 1; }
+ab_setlocale
 AGENT="${1:-claude}"
 STATE_DIR="${AGENT_BOARD_DIR:-$HOME/.local/state/agent-board}"
 SESS_DIR="$STATE_DIR/sessions"
@@ -56,7 +61,7 @@ if [[ "$AGENT" == "apply-title" ]]; then apply_title "${2:-}"; exit 0; fi
 # ── bootstrap <file>: sessions created by sync (no first prompt): goal from the
 #    transcript and title (normalizing the user's name, or Haiku in the background) ─
 infer_type() {
-  local p="${1,,}"
+  local p; p=$(ab_lc "$1")
   if   [[ "$p" =~ (arregl|fix|bug|error|falla|no funciona|rompe|broken|crash|debug) ]]; then echo fix
   elif [[ "$p" =~ (revisa|audita|review|audit|verifica|verify|reverif) ]]; then echo review
   elif [[ "$p" =~ (plan|diseña|design|evalúa|evaluate|propón|propose|compara|compare|investiga|investigate|research) ]]; then echo plan
@@ -88,18 +93,18 @@ if [[ "$AGENT" == "bootstrap" ]]; then
       if [[ "$name" =~ $FMT ]]; then title="$name"; type="${BASH_REMATCH[2]}"; tsrc="name"; title_src="name"
       else title="$project/$type: $name"; title_src="user"; fi
     elif [[ -n "$goal" ]]; then
-      words=$(printf '%s' "$goal" | cut -d' ' -f1-6); title="$project/$type: ${words,,}"; title="${title:0:70}"; title_src="provisional"; spawn=1
+      words=$(ab_lc "$(printf '%s' "$goal" | cut -d' ' -f1-6)"); title="$project/$type: ${words}"; title="${title:0:70}"; title_src="provisional"; spawn=1
     fi
   fi
-  exec 9>"$f.lock"; flock -w 5 9 || exit 0
+  ab_lock "$f" 5 || exit 0
   jq --arg goal "$goal" --arg tp "$tp" --arg title "$title" --arg tsrc "$title_src" --arg type "$type" --arg tysrc "$tsrc" --arg raw "$raw" --argjson sp "$spawn" \
      '.goal=(if $goal!="" then $goal else .goal end) | .transcript_path=(if $tp!="" then $tp else .transcript_path end)
       | .title=(if $title!="" then $title else .title end) | .title_source=(if $tsrc!="" then $tsrc else .title_source end)
       | .type=$type | .type_source=$tysrc | .raw_name=(if $raw!="" then $raw else .raw_name end) | .title_pending=(if $sp==1 then 1 else (.title_pending // 0) end) | .bootstrapped=1' \
      "$f" > "$f.tmp" && mv "$f.tmp" "$f"
-  flock -u 9
+  ab_unlock "$f"
   [[ -n "$title" ]] && apply_title "$f"
-  (( spawn )) && setsid -f "$HOME/.local/bin/agent-title" "$f" >/dev/null 2>&1 </dev/null
+  (( spawn )) && ab_spawn "$HOME/.local/bin/agent-title" "$f"
   exit 0
 fi
 [[ "${AGENT_BOARD_INTERNAL:-0}" == "1" ]] && exit 0   # internal session (classifier): no file
@@ -125,7 +130,7 @@ cwd=$(j '.cwd'); [[ -z "$cwd" ]] && cwd="$PWD"
 [[ "$cwd" == *"/.claude-mem/"* ]] && exit 0   # internal sessions of the claude-mem plugin
 now=$(date +%s)
 file="$SESS_DIR/$AGENT-$sid.json"
-exec 9>"$file.lock"; flock -w 5 9 || exit 0
+ab_lock "$file" 5 || exit 0
 old='{}'; [[ -f "$file" ]] && old=$(cat "$file")
 oldget() { jq -r "$1 // empty" <<<"$old" 2>/dev/null; }
 
@@ -158,7 +163,7 @@ elif [[ "$type_src" != "name" && "$type_src" != "user" ]]; then
   pm=$(j '.permission_mode'); prompt=$(j '.prompt')
   if [[ "$pm" == "plan" && "$type_src" != "model" ]]; then type="plan"; type_src="mode"
   elif [[ -n "$prompt" && ( -z "$type" || "$type_src" == "auto" ) ]]; then
-    p="${prompt,,}"
+    p=$(ab_lc "$prompt")
     if   [[ "$p" =~ (arregl|fix|bug|error|falla|no funciona|rompe|broken|crash|debug) ]]; then type="fix"
     elif [[ "$p" =~ (revisa|audita|review|audit|verifica|verify|reverif) ]]; then type="review"
     elif [[ "$p" =~ (plan|diseña|design|evalúa|evaluate|propón|propose|compara|compare|investiga|investigate|research) ]]; then type="plan"
@@ -216,7 +221,7 @@ elif [[ "$AGENT" == "codex" && -n "$name" && "$name" =~ $FMT && "$name" != "$tit
 fi
 if [[ -z "$title" && -n "$goal" ]]; then
   # instant provisional title; Haiku refines it in the background
-  words=$(printf '%s' "$goal" | tr -s '[:space:]' ' ' | cut -d' ' -f1-6); words="${words,,}"
+  words=$(ab_lc "$(printf '%s' "$goal" | tr -s '[:space:]' ' ' | cut -d' ' -f1-6)")
   title="$project/$type: ${words:0:48}"; title_src="provisional"; apply=1
   [[ "${pending:-0}" != "1" ]] && { spawn=1; pending=1; }
 fi
@@ -234,24 +239,24 @@ new=$(jq -n \
     transcript_path:$tp, title:$title, title_source:$titlesrc, raw_name:$raw, title_pending:$pending}')
 jq -n --argjson o "$old" --argjson n "$new" --argjson now "$now" \
   '($o + $n) | .started = ($o.started // $now)' > "$file.tmp" && mv "$file.tmp" "$file"
-flock -u 9
-printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -Is)" "$AGENT" "$project" "$event" "$state" "${title:-$name}" >> "$LOG"
+ab_unlock "$file"
+printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(ab_iso_date)" "$AGENT" "$project" "$event" "$state" "${title:-$name}" >> "$LOG"
 
 (( apply )) && apply_title "$file"
-(( spawn )) && setsid -f "$HOME/.local/bin/agent-title" "$file" >/dev/null 2>&1 </dev/null
+(( spawn )) && ab_spawn "$HOME/.local/bin/agent-title" "$file"
 
 # ── notifications on transitions ────────────────────────────────────────────
 [[ "${AGENT_BOARD_QUIET:-0}" == "1" ]] && exit 0
-command -v notify-send >/dev/null || exit 0
-label="${AGENT^} · ${title:-${name:-$project}}"
+ab_can_notify || exit 0
+label="$(ab_ucfirst "$AGENT") · ${title:-${name:-$project}}"
 icon="utilities-terminal"
 if [[ "$state" == "waiting" && "$prev" != "waiting" ]]; then
-  notify-send -a "airboss" -u critical -i dialog-question "$label" "$MSG_WAITING ${waiting_for}" 2>/dev/null
+  ab_notify critical dialog-question "$label" "$MSG_WAITING ${waiting_for}"
 elif [[ "$state" == "error" && "$prev" != "error" ]]; then
-  notify-send -a "airboss" -u critical -i dialog-error "$label" "$MSG_ERROR${waiting_for#error: }" 2>/dev/null
+  ab_notify critical dialog-error "$label" "$MSG_ERROR${waiting_for#error: }"
 elif [[ "$state" == "idle" && "$prev" == "working" && "${AGENT_BOARD_NOTIFY_STOP:-1}" == "1" ]]; then
-  notify-send -a "airboss" -u normal -t 8000 -i "$icon" "$label · $MSG_DONE_SUFFIX" "$(trunc "${last:-$MSG_TURN_DONE}" 160)" 2>/dev/null
+  ab_notify normal "$icon" "$label · $MSG_DONE_SUFFIX" "$(trunc "${last:-$MSG_TURN_DONE}" 160)"
 elif [[ "$state" == "done" && "$prev" != "done" ]]; then
-  notify-send -a "airboss" -u low -t 5000 -i "$icon" "$label" "$MSG_SESSION_CLOSED" 2>/dev/null
+  ab_notify low "$icon" "$label" "$MSG_SESSION_CLOSED"
 fi
 exit 0
