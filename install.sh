@@ -11,7 +11,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="$HOME/.local/bin"
 OS="$(uname -s)"
 say()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33m!!\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
 
 for dep in jq go; do
   command -v "$dep" >/dev/null || { warn "missing $dep"; exit 1; }
@@ -77,29 +77,95 @@ else
 fi
 
 # ── hooks ───────────────────────────────────────────────────────────────────
+# A hook whose command is not installed fires and fails on every event, so any
+# entry pointing at something missing is dropped (upstream ships an optional
+# `guard` PreToolUse hook that not everyone has).
+prune_missing_hooks() { # <json file> → the same JSON on stdout, minus dead hooks
+  local f="$1" missing="" c e list
+  list=$(jq -r '[.. | objects | select(has("command")) | .command] | .[]' "$f" | awk '{print $1}' | sort -u)
+  while IFS= read -r c; do
+    [ -z "$c" ] && continue
+    # the hook files carry $HOME literally, for the agent to expand at run time
+    e="${c//\$HOME/$HOME}"
+    case "$e" in *'$'*) continue ;; esac   # some other variable: not ours to judge
+    if [ -x "$e" ] || command -v "$e" >/dev/null 2>&1; then continue; fi
+    warn "skipping hook: $e is not installed"
+    missing="$missing$c
+"
+  done <<EOT
+$list
+EOT
+  if [ -z "$missing" ]; then cat "$f"; return 0; fi
+  jq --argjson miss "$(printf '%s' "$missing" | grep -v '^$' | jq -R . | jq -s .)" '
+    walk(if type == "object" and (.hooks | type) == "array"
+         then .hooks |= map(select((.command // "" | split(" ")[0]) as $c | ($miss | index($c)) | not))
+         else . end)
+    | walk(if type == "array"
+           then map(select(((.hooks | type) == "array" and (.hooks | length) == 0) | not))
+           else . end)
+    | walk(if type == "object"
+           then with_entries(select((.value | type) != "array" or (.value | length) > 0))
+           else . end)' "$f"
+}
+
+# Replaces airboss'"'"'s own entries and leaves every other hook in place.
+merge_hooks() { # <current hooks object> <new hooks object> → merged object
+  jq -n --argjson cur "$1" --argjson new "$2" '
+    $new | to_entries | reduce .[] as $e ($cur;
+      .[$e.key] = (((.[$e.key] // []) | map(select(any(.hooks[]?; .command | test("agent-event")) | not))) + $e.value))'
+}
+
 if [ "${1:-}" = "--hooks" ]; then
   S="$HOME/.claude/settings.json"
   if [ -f "$S" ]; then
     cp "$S" "$S.bak.$(date +%s)"
     say "merging hooks into $S (backup kept)"
-    jq --slurpfile h "$HERE/hooks/claude-hooks.json" '
-      .hooks = ((.hooks // {}) as $cur
-        | reduce ($h[0] | to_entries[]) as $e ($cur;
-            .[$e.key] = (((.[$e.key] // []) | map(select(any(.hooks[]?; .command | test("agent-event")) | not))) + $e.value)))' \
-      "$S" > "$S.tmp"
+    NEW=$(prune_missing_hooks "$HERE/hooks/claude-hooks.json")
+    MERGED=$(merge_hooks "$(jq '.hooks // {}' "$S")" "$NEW")
+    jq --argjson h "$MERGED" '.hooks = $h' "$S" > "$S.tmp"
     # written through, not moved into place: $S may be a symlink into a dotfiles repo
     cat "$S.tmp" > "$S" && rm -f "$S.tmp"
   else
     warn "$S not found: copy hooks/claude-hooks.json into it by hand"
   fi
+
   C="$HOME/.codex"
   if [ -d "$C" ]; then
-    [ -f "$C/hooks.json" ] && cp "$C/hooks.json" "$C/hooks.json.bak.$(date +%s)"
-    sed "s|\$HOME|$HOME|g" "$HERE/hooks/codex-hooks.json" > "$C/hooks.json"
-    say "wrote $C/hooks.json (open codex and accept them with /hooks)"
-    if ! grep -q 'agent-event' "$C/config.toml" 2>/dev/null; then
-      sed "s|/absolute/path/to/.local/bin|$BIN|" "$HERE/hooks/codex-config.snippet.toml" >> "$C/config.toml"
-      say "appended notify + tui notifications to $C/config.toml"
+    H="$C/hooks.json"
+    sed "s|\$HOME|$HOME|g" "$HERE/hooks/codex-hooks.json" > "$H.new"
+    NEW=$(prune_missing_hooks "$H.new" | jq '.hooks')
+    rm -f "$H.new"
+    if [ -f "$H" ]; then
+      cp "$H" "$H.bak.$(date +%s)"
+      # merge, never overwrite: other tools register their own Codex hooks here
+      say "merging hooks into $H (backup kept)"
+      MERGED=$(merge_hooks "$(jq '.hooks // {}' "$H")" "$NEW")
+      jq --argjson h "$MERGED" '.hooks = $h' "$H" > "$H.tmp" && cat "$H.tmp" > "$H" && rm -f "$H.tmp"
+    else
+      say "wrote $H"
+      jq -n --argjson h "$NEW" '{description: "airboss: per-session state and notifications", hooks: $h}' > "$H"
+    fi
+    say "open codex and accept the hooks with /hooks"
+
+    T="$C/config.toml"
+    if ! grep -q 'agent-event' "$T" 2>/dev/null; then
+      [ -f "$T" ] && cp "$T" "$T.bak.$(date +%s)"
+      # `notify` is a top-level key: appended at the end of the file it would
+      # become a member of whatever table happens to be last. Put it above the
+      # first table header instead.
+      LINE="notify = [\"$BIN/agent-event\", \"codex-notify\"]"
+      if [ -f "$T" ]; then
+        awk -v l="$LINE" 'BEGIN{d=0} /^\[/ && !d {print l; print ""; d=1} {print} END{if(!d) print l}' "$T" > "$T.tmp" \
+          && cat "$T.tmp" > "$T" && rm -f "$T.tmp"
+      else
+        printf '%s\n' "$LINE" > "$T"
+      fi
+      say "added the notify hook to $T"
+      if grep -q '^\[tui\]' "$T"; then
+        warn "[tui] already exists in $T: add notifications = [\"approval-requested\"] there by hand"
+      else
+        printf '\n[tui]\nnotifications = ["approval-requested"]\nnotification_condition = "always"\n' >> "$T"
+      fi
     fi
   fi
 fi
