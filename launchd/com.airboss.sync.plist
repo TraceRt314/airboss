@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- macOS equivalent of systemd/agent-board-sync.timer: runs the reconciler every
+     5 s. install.sh substitutes __HOME__ and __PATH__ and loads it. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.airboss.sync</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__HOME__/.local/bin/agent-board-sync</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>5</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>PATH</key>
+    <string>__PATH__</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/dev/null</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/.local/state/agent-board/sync.err.log</string>
+</dict>
+</plist>

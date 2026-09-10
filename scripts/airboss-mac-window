@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# airboss-mac-window — the macOS equivalent of `hyprctl clients` / `swaymsg get_tree`.
+#
+#   airboss-mac-window list            TSV: app<TAB>winid<TAB>tab<TAB>tty<TAB>apppid<TAB>title
+#   airboss-mac-window focus <app> <tty>
+#   airboss-mac-window focus-app <app>
+#
+# macOS has no compositor to ask, but the scriptable terminals expose the tty of
+# every tab, which is exactly what maps a session's pid (or its tmux client) to a
+# window. iTerm2 and Terminal.app are addressed by tty; every other terminal is
+# only activated, since none of them script their tabs.
+set -u
+cmd="${1:-list}"
+
+osa() { osascript "$@" 2>/dev/null; }
+# BSD pgrep -x matches the full executable path, so an app bundle never matches
+# by name; go through ps and compare basenames instead.
+apppid() { ps -Ao pid=,comm= | awk -v n="$1" '{ p=$1; sub(/^[ ]*[0-9]+[ ]+/,""); c=$0; sub(/.*\//,"",c); if (c==n) { print p; exit } }'; }
+running() { [ -n "$(apppid "$1")" ]; }
+
+list_iterm() {
+  running iTerm2 || return 0
+  local pid; pid=$(apppid iTerm2)
+  osa -e 'set d to character id 9
+  tell application "iTerm2"
+    set out to ""
+    repeat with w in windows
+      set i to 0
+      repeat with t in tabs of w
+        set i to i + 1
+        repeat with s in sessions of t
+          set out to out & ((id of w) as text) & d & (i as text) & d & (tty of s as text) & d & (name of s as text) & linefeed
+        end repeat
+      end repeat
+    end repeat
+    return out
+  end tell' | while IFS=$'\t' read -r wid tabi tty name; do
+    [ -n "${tty:-}" ] || continue
+    printf 'iTerm2\t%s\t%s\t%s\t%s\t%s\n' "$wid" "$tabi" "$tty" "${pid:-0}" "${name:-}"
+  done
+}
+
+list_terminal() {
+  running Terminal || return 0
+  local pid; pid=$(apppid Terminal)
+  osa -e 'set d to character id 9
+  tell application "Terminal"
+    set out to ""
+    repeat with w in windows
+      set i to 0
+      repeat with t in tabs of w
+        set i to i + 1
+        try
+          set out to out & ((id of w) as text) & d & (i as text) & d & (tty of t as text) & d & (name of t as text) & linefeed
+        end try
+      end repeat
+    end repeat
+    return out
+  end tell' | while IFS=$'\t' read -r wid tabi tty name; do
+    [ -n "${tty:-}" ] || continue
+    printf 'Terminal\t%s\t%s\t%s\t%s\t%s\n' "$wid" "$tabi" "$tty" "${pid:-0}" "${name:-}"
+  done
+}
+
+# Terminals with no tab scripting: one entry per running app, no tty. They can
+# still be matched through the pid ancestry and activated as a whole.
+list_opaque() {
+  local app pid
+  for app in ghostty Ghostty kitty wezterm-gui WezTerm alacritty Alacritty Warp Hyper Tabby; do
+    pid=$(apppid "$app")
+    [ -n "${pid:-}" ] || continue
+    printf '%s\t-\t-\t-\t%s\t%s\n' "$app" "$pid" "$app"
+  done
+}
+
+focus_by_tty() {
+  local app="$1" tty="$2"
+  case "$app" in
+    iTerm2)
+      osa -e "tell application \"iTerm2\"
+        activate
+        repeat with w in windows
+          repeat with t in tabs of w
+            repeat with s in sessions of t
+              if (tty of s as text) is \"$tty\" then
+                select w
+                select t
+                select s
+                return \"ok\"
+              end if
+            end repeat
+          end repeat
+        end repeat
+      end tell"
+      ;;
+    Terminal)
+      osa -e "tell application \"Terminal\"
+        activate
+        repeat with w in windows
+          repeat with t in tabs of w
+            try
+              if (tty of t as text) is \"$tty\" then
+                set frontmost of w to true
+                set selected of t to true
+                return \"ok\"
+              end if
+            end try
+          end repeat
+        end repeat
+      end tell"
+      ;;
+    *) focus_app "$app" ;;
+  esac
+}
+
+focus_app() {
+  local app="$1" pid
+  pid=$(apppid "$app")
+  if [ -n "${pid:-}" ]; then
+    osa -e "tell application \"System Events\" to set frontmost of (first process whose unix id is $pid) to true" && return 0
+  fi
+  open -a "$app" >/dev/null 2>&1
+}
+
+case "$cmd" in
+  list)      list_iterm; list_terminal; list_opaque ;;
+  focus)     focus_by_tty "${2:-}" "${3:-}" ;;
+  focus-app) focus_app "${2:-}" ;;
+  *) echo "usage: airboss-mac-window {list|focus <app> <tty>|focus-app <app>}" >&2; exit 2 ;;
+esac
+exit 0

@@ -6,7 +6,7 @@ One TUI that shows every Claude Code and Codex CLI session on your machine, grou
 <p align="center"><img src="docs/screenshot.svg" alt="airboss screenshot" width="100%"></p>
 
 <p align="center">
-<code>Go · Bubble Tea · ~1.5k lines</code> · <code>no daemon, no account, no Electron</code> · <code>Hyprland · Sway · tmux</code> · <code>follows your Omarchy theme</code>
+<code>Go · Bubble Tea · ~1.5k lines</code> · <code>no daemon, no account, no Electron</code> · <code>Linux: Hyprland · Sway</code> · <code>macOS: iTerm2 · Terminal.app</code> · <code>tmux</code> · <code>follows your Omarchy theme</code>
 </p>
 
 ---
@@ -17,22 +17,22 @@ You open a terminal per task, hand each one to an agent, and then you are alt-ta
 
 - **State per session**, fed by the agents' own hooks: `working`, `waiting` (permission, question, or a turn that ended and nobody came back within 60 s), `idle`, `error`, `done`. Codex sessions started before hooks existed are picked up from their rollout files.
 - **Grouped by project and typed by task** (`impl`, `plan`, `fix`, `review`, `ops`, `doc`). Titles follow the convention `project/type: description`; a background classifier names untitled sessions for you.
-- **Enter goes to the terminal.** airboss finds the compositor window that owns the agent process (walking `/proc` ancestors, tmux clients or window titles) and focuses it on Hyprland or Sway, then selects the tmux window and pane.
-- **Desktop notifications** when an agent waits for you, errors or finishes a turn, for both CLIs, through one script.
+- **Enter goes to the terminal.** On Linux airboss finds the compositor window that owns the agent process (walking `/proc` ancestors, tmux clients or window titles) and focuses it on Hyprland or Sway. On macOS it matches the session's tty — its tmux client's when it runs in a pane — against the tabs iTerm2 and Terminal.app expose over AppleScript, and raises that exact tab. Either way it then selects the tmux window and pane.
+- **Desktop notifications** when an agent waits for you, errors or finishes a turn, for both CLIs, through one script: `notify-send` on Linux, `terminal-notifier` or `osascript` on macOS.
 - **Looks like your desktop.** Palette from the active Omarchy theme, nine built-in themes, three icon sets, every glyph and color overridable in a small TOML.
 
 ## Install
 
-Requirements: Linux, Go ≥ 1.22, `jq`. Optional: `tmux`, `notify-send`, a [Nerd Font](https://www.nerdfonts.com/), Hyprland or Sway for window focus.
+Requirements: Linux or macOS, Go ≥ 1.22, `jq`. Optional: `tmux`, a [Nerd Font](https://www.nerdfonts.com/).
 
 ```bash
 git clone https://github.com/TraceRt314/airboss.git ~/airboss && cd ~/airboss
 ./install.sh --hooks      # builds airboss-tui, links scripts into ~/.local/bin,
-                          # installs the systemd user timer, registers the hooks
+                          # installs the 5 s sync timer, registers the hooks
 airboss
 ```
 
-`--hooks` merges `hooks/claude-hooks.json` into `~/.claude/settings.json` (backup kept) and writes `~/.codex/hooks.json` plus a `notify` line in `~/.codex/config.toml`. Codex asks you once to trust the hooks with `/hooks`. Without `--hooks` nothing outside `~/.local/bin`, `~/.config/airboss` and the systemd unit is touched.
+`--hooks` merges `hooks/claude-hooks.json` into `~/.claude/settings.json` (backup kept) and writes `~/.codex/hooks.json` plus a `notify` line in `~/.codex/config.toml`. Codex asks you once to trust the hooks with `/hooks`. Without `--hooks` nothing outside `~/.local/bin`, `~/.config/airboss` and the timer unit is touched.
 
 Bind it to a key. Omarchy / Hyprland (`~/.config/hypr/bindings.lua`):
 
@@ -41,6 +41,36 @@ o.bind("SUPER + F1", "airboss", { tui = "airboss", focus = true })
 ```
 
 Sway: `bindsym $mod+F1 exec foot -a airboss airboss`.
+
+### macOS
+
+Everything works except what the platform does not have: there is no compositor, so window focus goes through AppleScript, and the 5 s reconcile runs under launchd instead of a systemd timer. The installer picks all of this up from `uname`; there is nothing extra to do.
+
+| | Linux | macOS |
+|---|---|---|
+| periodic sync | systemd user timer | launchd agent `com.airboss.sync` |
+| notifications | `notify-send` | `terminal-notifier`, else `osascript` |
+| jump to the tab | Hyprland / Sway, by pid ancestry | iTerm2 / Terminal.app, by tty |
+| other terminals | any Wayland client | Ghostty, kitty, WezTerm, Alacritty, Warp: raised as an app, no per-tab jump (they do not script their tabs) |
+
+Optional but recommended:
+
+```bash
+brew install terminal-notifier   # clickable, grouped notifications instead of osascript's
+```
+
+The first notification asks for permission — allow it for iTerm2 (or for `terminal-notifier`) in System Settings → Notifications, or nothing will ever show up.
+
+Bind it to a key in iTerm2: Settings → Keys → Key Bindings → `+`, action **Send Text**, `airboss\n`. Inside tmux, `airboss` opens in its own `airboss` window, so the binding works from any pane.
+
+Check that window resolution works on your setup:
+
+```bash
+airboss-tui windows          # every tab airboss sees, and the one each session maps to
+airboss-focus --dry-run PID  # where a given pid would take you, without jumping
+```
+
+The scripts are written for bash 3.2, the one macOS ships, so no Homebrew bash is needed.
 
 ## Keys
 
@@ -64,7 +94,7 @@ Claude Code hooks ─┐                       ┌─ airboss-tui        (this T
 Codex CLI hooks ───┼─▶ agent-event ─▶ state/ ┼─ statusline / tmux segment
 codex notify ──────┘         ▲              └─ notify-send
                              │
-systemd timer, 5 s ─▶ agent-board-sync   (claude agents --json, /proc, Codex rollouts)
+systemd / launchd, 5 s ─▶ agent-board-sync  (claude agents --json, process table, Codex rollouts)
 ```
 
 - `scripts/agent-event` receives every hook event from both CLIs on stdin, normalizes it into one JSON card per session under `~/.local/state/agent-board/sessions/`, sets the canonical title and sends desktop notifications on the transitions that matter.
@@ -153,7 +183,7 @@ Rough order. Open an issue if one of these matters to you, or send a PR.
 - **More agents.** Gemini CLI, OpenCode and Copilot CLI expose hooks or session files comparable to Claude Code and Codex; each is a small adapter in `agent-event` plus a discovery rule in `agent-board-sync`.
 - **Phone alerts.** An optional [ntfy](https://ntfy.sh) / Telegram sink next to `notify-send`, only for the *waiting for you* transition, so a long task can run while you are away from the desk.
 - **Cost per session.** Token and cost figures from the CLIs' own usage logs on each card, with a weekly budget line in the header and a warning when it is about to be exceeded.
-- **macOS backend.** Window resolution through Yabai or AeroSpace and process ancestry through `ps`, so the same TUI works there.
+- **Per-tab jumps in the other macOS terminals.** Ghostty, kitty, WezTerm and Alacritty are raised as an app today; kitty's remote control and `wezterm cli list` both expose a pane tty and would close the gap.
 - **Waybar / status bar module.** A ready-made module fed by `summary.json`, in addition to the tmux segment.
 - **Handoffs.** Show a session's last handoff note on its card and let <kbd>a</kbd> resume with it, so a finished session can be picked up hours later without re-reading the transcript.
 - **Zellij and Kitty tabs** as pane backends besides tmux.
@@ -162,7 +192,9 @@ Not planned: running or sandboxing the agents, worktree management, a web UI. Ot
 
 ## Status
 
-Built on Arch + Omarchy with Claude Code 2.1 and Codex CLI 0.150. Hyprland focus uses the Lua dispatcher of Hyprland ≥ 0.56 with the classic syntax as fallback. macOS is not supported (no `/proc`, no compositor backend); a Yabai/AeroSpace backend would be a small addition in `window.go`. PRs welcome.
+Built on Arch + Omarchy with Claude Code 2.1 and Codex CLI 0.150. Hyprland focus uses the Lua dispatcher of Hyprland ≥ 0.56 with the classic syntax as fallback.
+
+macOS is supported from 26 (Tahoe), tested on iTerm2 with the system bash 3.2: `window_darwin.go` resolves tabs by tty through AppleScript, `scripts/lib-airboss.sh` fills in for `flock`, `setsid`, `timeout`, GNU `stat` and `/proc`, and the reconcile runs under launchd. Terminals that do not script their tabs can only be raised, not tab-selected. PRs welcome.
 
 ## License
 

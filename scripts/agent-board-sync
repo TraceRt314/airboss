@@ -4,35 +4,45 @@
 #     creates entries for sessions opened before the hooks existed.
 #   - Codex: locates the pid by cwd among live `codex` processes.
 #   - Marks `done` the sessions whose process no longer exists.
-# Run by a systemd --user timer every 5s, and by the TUI itself.
+# Run every 5s by a systemd --user timer (Linux) or a launchd agent (macOS),
+# and by the TUI itself.
 set -u
-export LC_ALL=C.UTF-8
+_ab_dir="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+for _c in "$_ab_dir/lib-airboss.sh" "$HOME/.local/bin/lib-airboss.sh"; do
+  [ -r "$_c" ] && { . "$_c"; break; }
+done
+command -v ab_lock >/dev/null 2>&1 || { echo "airboss: lib-airboss.sh not found" >&2; exit 1; }
+ab_setlocale
 STATE_DIR="${AGENT_BOARD_DIR:-$HOME/.local/state/agent-board}"
 SESS_DIR="$STATE_DIR/sessions"
 mkdir -p "$SESS_DIR"
 # only one sync at a time: the timer and the TUI can overlap and clobber files
-exec 8>"$STATE_DIR/sync.lock"; flock -n 8 || exit 0
+ab_trylock "$STATE_DIR/sync" || exit 0
+trap 'ab_unlock "$STATE_DIR/sync"' EXIT
 TMP=".tmp.$$"
 now=$(date +%s)
 CLAUDE_BIN=$(command -v claude 2>/dev/null || ls -1 "$HOME"/.local/share/mise/installs/claude/*/claude 2>/dev/null | tail -1)
 
 agents='[]'
 if [[ -n "${CLAUDE_BIN:-}" ]]; then
-  agents=$(timeout 5 "$CLAUDE_BIN" agents --json 2>/dev/null) || agents='[]'
+  agents=$(ab_timeout 5 "$CLAUDE_BIN" agents --json 2>/dev/null) || agents='[]'
   jq -e 'type=="array"' >/dev/null 2>&1 <<<"$agents" || agents='[]'
 fi
 
 # pid → tmux target (#S:#I.#P) for processes that live in a pane
-declare -A PANE_OF
+PANE_TABLE=""
 if tmux info >/dev/null 2>&1; then
-  while IFS=$'\t' read -r ppid target; do PANE_OF[$ppid]="$target"; done < <(tmux list-panes -a -F $'#{pane_pid}\t#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null)
+  PANE_TABLE=$(tmux list-panes -a -F $'#{pane_pid}\t#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null)
 fi
+pane_of() { printf '%s\n' "$PANE_TABLE" | awk -F'\t' -v p="$1" '$1==p {print $2; exit}'; }
 pane_for_pid() { # walk up the parents until the pane's pid is found
-  local p="$1" i
+  local p="$1" i hit
+  [[ -z "$PANE_TABLE" ]] && return
   for i in 1 2 3 4 5 6; do
     [[ -z "$p" || "$p" == 1 ]] && break
-    [[ -n "${PANE_OF[$p]:-}" ]] && { printf '%s' "${PANE_OF[$p]}"; return; }
-    p=$(awk '{print $4}' "/proc/$p/stat" 2>/dev/null)
+    hit=$(pane_of "$p")
+    [[ -n "$hit" ]] && { printf '%s' "$hit"; return; }
+    p=$(ab_ppid "$p")
   done
 }
 
@@ -77,20 +87,22 @@ for f in "$SESS_DIR"/claude-*.json; do
 done
 
 # ── Codex: pid by cwd of live processes ─────────────────────────────────────
-declare -A CODEX_PID_BY_CWD
+CODEX_CWD_TABLE=""
 while read -r cpid; do
-  c=$(readlink -f "/proc/$cpid/cwd" 2>/dev/null); [[ -n "$c" ]] && CODEX_PID_BY_CWD[$c]="$cpid"
-done < <(pgrep -x codex 2>/dev/null)
+  [[ -z "$cpid" ]] && continue
+  c=$(ab_cwd_of_pid "$cpid"); [[ -n "$c" ]] && CODEX_CWD_TABLE="$CODEX_CWD_TABLE$c\t$cpid"$'\n'
+done < <(ab_pids_of codex)
+codex_pid_for_cwd() { printf '%s' "$CODEX_CWD_TABLE" | awk -F'\t' -v c="$1" '$1==c {print $2; exit}'; }
 
 # ── Codex: entries for live processes without one (sessions predating hooks.json,
-#    which never fire hooks). The rollout open in /proc/<pid>/fd gives the id. ──
+#    which never fire hooks). The rollout file the process holds open gives the id. ──
 while read -r cpid; do
-  roll=$(ls -l "/proc/$cpid/fd" 2>/dev/null | grep -o '[^ ]*/\.codex/sessions/[^ ]*rollout-[^ ]*\.jsonl' | head -1)
+  roll=$(ab_files_of_pid "$cpid" | grep -o '[^ ]*/\.codex/sessions/[^ ]*rollout-[^ ]*\.jsonl' | head -1)
   [[ -z "$roll" ]] && continue
   sid=$(basename "$roll" .jsonl); sid="${sid: -36}"
   file="$SESS_DIR/codex-$sid.json"
   if ! jq -e . "$file" >/dev/null 2>&1; then
-    cwd=$(readlink -f "/proc/$cpid/cwd" 2>/dev/null)
+    cwd=$(ab_cwd_of_pid "$cpid")
     name=$(jq -r --arg s "$sid" 'select(.id==$s) | .thread_name // empty' "$HOME/.codex/session_index.jsonl" 2>/dev/null | tail -1)
     if [[ "$cwd" == "$HOME" ]]; then project="home"; else root=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null); project=$(basename "${root:-$cwd}"); fi
     type="impl"; tsrc="auto"; title=""; title_src=""
@@ -103,7 +115,7 @@ while read -r cpid; do
     fi
     goal=$(grep -m5 '"role":"user"' "$roll" 2>/dev/null | jq -r '(.payload.content // []) | map(select(.type=="input_text" or .type=="text") | .text) | join(" ")' 2>/dev/null \
       | sed 's/^[[:space:]]*//' | grep -v -E '^(<|$)' | head -1 | tr -s '[:space:]' ' ' | cut -c1-240)
-    started=$(stat -c %W "$roll" 2>/dev/null); [[ -z "$started" || "$started" == 0 ]] && started=$(stat -c %Y "$roll")
+    started=$(ab_stat_btime "$roll")
     jq -n --arg sid "$sid" --arg name "$name" --arg title "$title" --arg tsrc "$title_src" --arg project "$project" --arg cwd "$cwd" \
        --arg type "$type" --arg tysrc "$tsrc" --arg goal "$goal" --arg tp "$roll" --argjson pid "$cpid" --argjson started "$started" \
       '{agent:"codex", session_id:$sid, name:$name, title:$title, title_source:$tsrc, project:$project, cwd:$cwd, type:$type, type_source:$tysrc,
@@ -116,7 +128,7 @@ while read -r cpid; do
   # the rest of the turn. Incremental read: only what was appended since the last
   # pass (the rollout can grow to hundreds of MB in long sessions); the first
   # pass reads it in full.
-  size=$(stat -c %s "$roll" 2>/dev/null || echo 0)
+  size=$(ab_stat_size "$roll")
   read -r off lastev cur < <(jq -r '"\(.roll_off // 0) \(.roll_last // "-") \(.state // "-")"' "$file")
   (( off > size )) && off=0
   if (( size > off )); then
@@ -125,11 +137,11 @@ while read -r cpid; do
   fi
   st=idle; [[ "$lastev" == *task_started* ]] && st=working
   [[ "$cur" == "waiting" && "$st" == "working" ]] && st=waiting
-  mt=$(stat -c %Y "$roll" 2>/dev/null || echo 0)
+  mt=$(ab_stat_mtime "$roll")
   jq --arg st "$st" --arg le "$lastev" --argjson off "$size" --argjson mt "$mt" --argjson pid "$cpid" --argjson now "$now" \
      '.state=$st | .waiting_for=(if $st=="waiting" then .waiting_for else null end) | .updated=$mt | .pid=$pid | .synced=$now
       | .roll_off=$off | .roll_last=$le' "$file" > "$file$TMP" && mv "$file$TMP" "$file"
-done < <(pgrep -x codex 2>/dev/null)
+done < <(ab_pids_of codex)
 
 # ── Sessions whose process no longer exists → done ─────────────────────────
 live_ids=$(jq -r '.[].sessionId' <<<"$agents" 2>/dev/null)
@@ -144,7 +156,7 @@ for f in "$SESS_DIR"/*.json; do
     (( now - upd < 20 )) && continue
     jq --argjson now "$now" '.state="done" | .waiting_for=null | .synced=$now' "$f" > "$f$TMP" && mv "$f$TMP" "$f"
   else
-    cwd=$(jq -r '.cwd // "-"' "$f"); [[ -z "$cwd" ]] && cwd="-"; pid="${CODEX_PID_BY_CWD[$cwd]:-}"
+    cwd=$(jq -r '.cwd // "-"' "$f"); [[ -z "$cwd" ]] && cwd="-"; pid=$(codex_pid_for_cwd "$cwd")
     if [[ -n "$pid" ]]; then
       target=$(pane_for_pid "$pid")
       jq --argjson pid "$pid" --arg tt "$target" --argjson now "$now" '.pid=$pid | .tmux_target=(if $tt != "" then $tt else .tmux_target end) | .synced=$now' "$f" > "$f$TMP" && mv "$f$TMP" "$f"

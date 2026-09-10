@@ -20,7 +20,7 @@ func main() {
 	lng := flag.String("lang", "", "language: es | en")
 	showVersion := flag.Bool("version", false, "show version")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "airboss-tui %s\n\nusage: airboss-tui [flags] [sync | color <key> | themes]\n\n", version)
+		fmt.Fprintf(os.Stderr, "airboss-tui %s\n\nusage: airboss-tui [flags] [sync | color <key> | themes | windows]\n\n", version)
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -52,6 +52,9 @@ func main() {
 		return
 	case "color": // airboss-tui color accent → #89b4fa (for tmux, starship, scripts)
 		fmt.Println(pal[flag.Arg(1)])
+		return
+	case "windows": // diagnostic: what airboss sees and where it would jump
+		printWindows(&cfg)
 		return
 	case "themes":
 		for n := range builtinThemes {

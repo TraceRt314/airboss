@@ -1,28 +1,90 @@
 #!/usr/bin/env bash
-# airboss-focus <pid> [tmux_target] — brings focus to the terminal where a session lives.
-#   1. If Hyprland is present: focuses the window (foot/kitty/...) that is an ancestor of the pid.
-#   2. If tmux_target (session:window.pane) is given: switches to that window and pane.
+# airboss-focus [--dry-run] <pid> [tmux_target] — brings focus to the terminal
+# where a session lives.
+#   Linux : the Hyprland/Sway window that is an ancestor of the pid.
+#   macOS : the iTerm2 / Terminal.app tab whose tty is the session's (or the
+#           session's tmux client's); other terminals are only raised.
+#   Then, if tmux_target (session:window.pane) is given, switches to that pane.
 set -u
+_ab_dir="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+for _c in "$_ab_dir/lib-airboss.sh" "$HOME/.local/bin/lib-airboss.sh"; do
+  [ -r "$_c" ] && { . "$_c"; break; }
+done
+command -v ab_ppid >/dev/null 2>&1 || { echo "airboss: lib-airboss.sh not found" >&2; exit 1; }
+
 dry=0; [[ "${1:-}" == "--dry-run" ]] && { dry=1; shift; }
 pid="${1:-}"; target="${2:-}"
 [[ -z "$pid" && -z "$target" ]] && exit 1
 
-if [[ -n "$pid" ]] && command -v hyprctl >/dev/null 2>&1; then
-  mapfile -t winpids < <(hyprctl clients -j 2>/dev/null | jq -r '.[].pid')
+# ── the tty the terminal knows about: the tmux client's when in a pane ──────
+session_tty() {
+  local sess t
+  if [[ -n "$target" ]] && tmux info >/dev/null 2>&1; then
+    sess="${target%%:*}"
+    t=$(tmux list-clients -F '#{client_tty} #{session_name}' 2>/dev/null | awk -v s="$sess" '$2==s{print $1; exit}')
+    [[ -z "$t" ]] && t=$(tmux list-clients -F '#{client_tty}' 2>/dev/null | head -1)
+    [[ -n "$t" ]] && { printf '%s' "$t"; return; }
+  fi
+  [[ -n "$pid" ]] && ab_tty_of_pid "$pid"
+}
+
+# ── macOS ───────────────────────────────────────────────────────────────────
+focus_macos() {
+  local helper tty app row p i
+  helper="$_ab_dir/airboss-mac-window"
+  [[ -x "$helper" ]] || helper="$HOME/.local/bin/airboss-mac-window"
+  [[ -x "$helper" ]] || { (( dry )) && echo "airboss-mac-window not found"; return; }
+
+  tty=$(session_tty)
+  if [[ -n "$tty" ]]; then
+    row=$("$helper" list | awk -F'\t' -v t="$tty" '$4==t {print; exit}')
+    if [[ -n "$row" ]]; then
+      app=$(printf '%s' "$row" | cut -f1)
+      if (( dry )); then echo "macOS tab: $app · $tty · $(printf '%s' "$row" | cut -f6)"
+      else "$helper" focus "$app" "$tty"; fi
+      return
+    fi
+  fi
+  # no tab matched: raise the terminal application that owns the pid
   p="$pid"
-  for _ in 1 2 3 4 5 6 7 8; do
+  for i in 1 2 3 4 5 6 7 8; do
     [[ -z "$p" || "$p" == 1 ]] && break
-    for w in "${winpids[@]}"; do
-      if [[ "$w" == "$p" ]]; then
-        if (( dry )); then echo "Hyprland window: pid $p ($(hyprctl clients -j | jq -r --argjson p "$p" '.[] | select(.pid==$p) | .class + " · " + .title'))"
-        else hyprctl dispatch "hl.dsp.focus({ window = \"pid:$p\" })" >/dev/null 2>&1 || hyprctl dispatch focuswindow "pid:$p" >/dev/null 2>&1; fi
-        p=""; break 2
-      fi
-    done
-    # ppid: field after the ")" that closes comm (comm may contain spaces)
-    p=$(sed -E 's/^.*\) [A-Za-z] ([0-9]+).*/\1/' "/proc/$p/stat" 2>/dev/null)
+    row=$("$helper" list | awk -F'\t' -v p="$p" '$5==p {print; exit}')
+    if [[ -n "$row" ]]; then
+      app=$(printf '%s' "$row" | cut -f1)
+      if (( dry )); then echo "macOS app: $app (no tab for pid $pid)"
+      else "$helper" focus-app "$app"; fi
+      return
+    fi
+    p=$(ab_ppid "$p")
   done
-  (( dry )) && [[ -n "$p" ]] && echo "no Hyprland window for pid $pid"
+  (( dry )) && echo "no macOS terminal window for pid $pid"
+}
+
+# ── Hyprland ────────────────────────────────────────────────────────────────
+focus_hyprland() {
+  local winpids p i w
+  command -v hyprctl >/dev/null 2>&1 || return
+  winpids=$(hyprctl clients -j 2>/dev/null | jq -r '.[].pid')
+  p="$pid"
+  for i in 1 2 3 4 5 6 7 8; do
+    [[ -z "$p" || "$p" == 1 ]] && break
+    while read -r w; do
+      [[ "$w" == "$p" ]] || continue
+      if (( dry )); then echo "Hyprland window: pid $p ($(hyprctl clients -j | jq -r --argjson p "$p" '.[] | select(.pid==$p) | .class + " · " + .title'))"
+      else hyprctl dispatch "hl.dsp.focus({ window = \"pid:$p\" })" >/dev/null 2>&1 || hyprctl dispatch focuswindow "pid:$p" >/dev/null 2>&1; fi
+      return
+    done <<< "$winpids"
+    p=$(ab_ppid "$p")
+  done
+  (( dry )) && echo "no Hyprland window for pid $pid"
+}
+
+if [[ -n "$pid" ]]; then
+  case "$AB_OS" in
+    darwin) focus_macos ;;
+    *)      focus_hyprland ;;
+  esac
 fi
 (( dry )) && { [[ -n "$target" ]] && echo "tmux: $target"; exit 0; }
 

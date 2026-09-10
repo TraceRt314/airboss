@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# airboss-notify <urgency> <icon> <title> <body>
+#   urgency: low | normal | critical      icon: a freedesktop icon name (Linux only)
+#
+# Linux : notify-send.
+# macOS : terminal-notifier when installed (clickable, per-app grouping), else
+#         osascript's `display notification`. Critical events get a sound.
+set -u
+urgency="${1:-normal}"; icon="${2:-utilities-terminal}"; title="${3:-airboss}"; body="${4:-}"
+
+case "$(uname -s)" in
+Darwin)
+  sound=""
+  [ "$urgency" = critical ] && sound="Basso"
+  if command -v terminal-notifier >/dev/null 2>&1; then
+    set -- -title "$title" -message "$body" -group "airboss" -sender com.apple.Terminal
+    [ -n "$sound" ] && set -- "$@" -sound "$sound"
+    terminal-notifier "$@" >/dev/null 2>&1
+    exit 0
+  fi
+  # osascript: strings are AppleScript literals, escape backslashes and quotes
+  esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\r'; }
+  if [ -n "$sound" ]; then
+    osascript -e "display notification \"$(esc "$body")\" with title \"$(esc "$title")\" sound name \"$sound\"" >/dev/null 2>&1
+  else
+    osascript -e "display notification \"$(esc "$body")\" with title \"$(esc "$title")\"" >/dev/null 2>&1
+  fi
+  ;;
+*)
+  command -v notify-send >/dev/null 2>&1 || exit 0
+  case "$urgency" in
+    critical) notify-send -a airboss -u critical -i "$icon" "$title" "$body" ;;
+    low)      notify-send -a airboss -u low -t 5000 -i "$icon" "$title" "$body" ;;
+    *)        notify-send -a airboss -u normal -t 8000 -i "$icon" "$title" "$body" ;;
+  esac
+  ;;
+esac
+exit 0
