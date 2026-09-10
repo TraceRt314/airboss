@@ -54,10 +54,12 @@ func newModel(cfg *Config) model {
 
 func (m *model) reload() {
 	ss := loadSessions(m.dir)
-	wins := listWindows()
-	for i := range ss {
-		if ss[i].State != "done" {
-			ss[i].win = resolveWindow(&ss[i], wins)
+	if m.cfg.Features.WindowFocus {
+		wins := listWindows()
+		for i := range ss {
+			if ss[i].State != "done" {
+				ss[i].win = resolveWindow(&ss[i], wins)
+			}
 		}
 	}
 	m.sessions = ss

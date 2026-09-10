@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,8 @@ type Config struct {
 	Theme    ThemeConfig              `toml:"theme"`
 	Icons    IconConfig               `toml:"icons"`
 	UI       UIConfig                 `toml:"ui"`
+	Notify   NotifyConfig             `toml:"notify"`
+	Features FeaturesConfig           `toml:"features"`
 	Types    map[string]TypeConfig    `toml:"types"`
 	Projects map[string]ProjectConfig `toml:"projects"`
 }
@@ -40,6 +43,43 @@ type UIConfig struct {
 	NameWidth   int    `toml:"name_width"`
 	Spinner     string `toml:"spinner"` // braille | dots | line | none
 	StateDir    string `toml:"state_dir"`
+}
+
+// NotifyConfig decides which transitions are announced and where. The scripts
+// read it through `airboss-tui config`, so there is one source of truth.
+type NotifyConfig struct {
+	Enabled  bool           `toml:"enabled"`
+	Sinks    []string       `toml:"sinks"` // desktop | ntfy | telegram | command
+	Events   NotifyEvents   `toml:"events"`
+	Ntfy     NtfyConfig     `toml:"ntfy"`
+	Telegram TelegramConfig `toml:"telegram"`
+	Command  string         `toml:"command"` // run with <urgency> <icon> <title> <body>
+}
+
+type NotifyEvents struct {
+	Waiting     bool `toml:"waiting"`      // the agent needs an answer from you
+	Error       bool `toml:"error"`        // the agent errored
+	TurnDone    bool `toml:"turn_done"`    // a turn ended and the agent went idle
+	SessionDone bool `toml:"session_done"` // the session closed
+}
+
+type NtfyConfig struct {
+	URL   string `toml:"url"`   // server, default https://ntfy.sh
+	Topic string `toml:"topic"` // required to enable the sink
+	Token string `toml:"token"` // literal, env:VAR or file:/path
+}
+
+type TelegramConfig struct {
+	Token  string `toml:"token"`   // literal, env:VAR or file:/path
+	ChatID string `toml:"chat_id"` // required to enable the sink
+}
+
+// FeaturesConfig turns whole parts of airboss off. Everything is on by default.
+type FeaturesConfig struct {
+	Classifier  bool `toml:"classifier"`   // name untitled sessions with a small model
+	WindowFocus bool `toml:"window_focus"` // resolve and raise terminal windows
+	ApplyTitle  bool `toml:"apply_title"`  // push the canonical title back into the CLI
+	Sync        bool `toml:"sync"`         // the periodic reconcile pass
 }
 
 type TypeConfig struct {
@@ -71,6 +111,13 @@ func defaultConfig() Config {
 			Title: "AIRBOSS", Lang: lang, ShowGoal: true, Details: true, DetailLines: 5,
 			Border: "rounded", TickSeconds: 2, NameWidth: 44, Spinner: "braille",
 		},
+		Notify: NotifyConfig{
+			Enabled: true,
+			Sinks:   []string{"desktop"},
+			Events:  NotifyEvents{Waiting: true, Error: true, TurnDone: true, SessionDone: true},
+			Ntfy:    NtfyConfig{URL: "https://ntfy.sh"},
+		},
+		Features: FeaturesConfig{Classifier: true, WindowFocus: true, ApplyTitle: true, Sync: true},
 	}
 }
 
@@ -110,6 +157,89 @@ func loadConfig(path string) (Config, error) {
 		cfg.UI.NameWidth = 16
 	}
 	return cfg, nil
+}
+
+// ── secrets ────────────────────────────────────────────────────────────────
+// A token in config.toml can be the literal value, "env:VAR" or "file:/path",
+// so a config file that lives in a dotfiles repo need not hold the secret.
+// expandHome makes a leading ~/ usable in config values that become shell
+// words: the shell does not tilde-expand the result of a variable expansion.
+func expandHome(p string) string {
+	if strings.HasPrefix(p, "~/") {
+		return filepath.Join(os.Getenv("HOME"), p[2:])
+	}
+	return p
+}
+
+func resolveSecret(v string) string {
+	switch {
+	case strings.HasPrefix(v, "env:"):
+		return os.Getenv(strings.TrimPrefix(v, "env:"))
+	case strings.HasPrefix(v, "file:"):
+		b, err := os.ReadFile(expandHome(strings.TrimPrefix(v, "file:")))
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(b))
+	}
+	return v
+}
+
+// activeSinks drops sinks that are unknown or missing their required setting,
+// so a half-written [notify.ntfy] never silently swallows notifications.
+func (n NotifyConfig) activeSinks() []string {
+	var out []string
+	for _, s := range n.Sinks {
+		switch strings.TrimSpace(strings.ToLower(s)) {
+		case "desktop":
+			out = append(out, "desktop")
+		case "ntfy":
+			if n.Ntfy.Topic != "" {
+				out = append(out, "ntfy")
+			}
+		case "telegram":
+			if n.Telegram.ChatID != "" && resolveSecret(n.Telegram.Token) != "" {
+				out = append(out, "telegram")
+			}
+		case "command":
+			if n.Command != "" {
+				out = append(out, "command")
+			}
+		}
+	}
+	return out
+}
+
+// ── `airboss-tui config`: the resolved config as shell assignments ──────────
+// The shell side of airboss (hooks, sync, notifier) evals this instead of
+// parsing TOML, so config.toml stays the single source of truth.
+func boolVal(b bool) string {
+	if b {
+		return "1"
+	}
+	return "0"
+}
+
+func printShellConfig(cfg *Config) {
+	kv := func(k, v string) { fmt.Printf("%s=%s\n", k, shellQuote(v)) }
+	kv("AIRBOSS_LANG", cfg.UI.Lang)
+	kv("AIRBOSS_STATE_DIR", stateDir(cfg))
+	kv("AIRBOSS_NOTIFY_ENABLED", boolVal(cfg.Notify.Enabled))
+	kv("AIRBOSS_NOTIFY_SINKS", strings.Join(cfg.Notify.activeSinks(), " "))
+	kv("AIRBOSS_NOTIFY_WAITING", boolVal(cfg.Notify.Events.Waiting))
+	kv("AIRBOSS_NOTIFY_ERROR", boolVal(cfg.Notify.Events.Error))
+	kv("AIRBOSS_NOTIFY_TURN_DONE", boolVal(cfg.Notify.Events.TurnDone))
+	kv("AIRBOSS_NOTIFY_SESSION_DONE", boolVal(cfg.Notify.Events.SessionDone))
+	kv("AIRBOSS_NTFY_URL", strings.TrimSuffix(cfg.Notify.Ntfy.URL, "/"))
+	kv("AIRBOSS_NTFY_TOPIC", cfg.Notify.Ntfy.Topic)
+	kv("AIRBOSS_NTFY_TOKEN", resolveSecret(cfg.Notify.Ntfy.Token))
+	kv("AIRBOSS_TELEGRAM_TOKEN", resolveSecret(cfg.Notify.Telegram.Token))
+	kv("AIRBOSS_TELEGRAM_CHAT_ID", cfg.Notify.Telegram.ChatID)
+	kv("AIRBOSS_NOTIFY_COMMAND", expandHome(cfg.Notify.Command))
+	kv("AIRBOSS_FEATURE_CLASSIFIER", boolVal(cfg.Features.Classifier))
+	kv("AIRBOSS_FEATURE_WINDOW_FOCUS", boolVal(cfg.Features.WindowFocus))
+	kv("AIRBOSS_FEATURE_APPLY_TITLE", boolVal(cfg.Features.ApplyTitle))
+	kv("AIRBOSS_FEATURE_SYNC", boolVal(cfg.Features.Sync))
 }
 
 // ── icons ───────────────────────────────────────────────────────────────────

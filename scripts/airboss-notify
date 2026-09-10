@@ -2,37 +2,100 @@
 # airboss-notify <urgency> <icon> <title> <body>
 #   urgency: low | normal | critical      icon: a freedesktop icon name (Linux only)
 #
-# Linux : notify-send.
-# macOS : terminal-notifier when installed (clickable, per-app grouping), else
-#         osascript's `display notification`. Critical events get a sound.
+# Fans the notification out to every sink listed in [notify].sinks of
+# ~/.config/airboss/config.toml (default: desktop):
+#
+#   desktop   notify-send on Linux; terminal-notifier or osascript on macOS
+#   ntfy      an ntfy topic — this is what reaches your phone
+#   telegram  a Telegram bot message
+#   command   your own script, called with the same four arguments
+#
+# Every sink is best-effort and runs in the background: a hook is never held up
+# by a slow network, and one broken sink does not stop the others.
 set -u
-urgency="${1:-normal}"; icon="${2:-utilities-terminal}"; title="${3:-airboss}"; body="${4:-}"
+_ab_dir="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+for _c in "$_ab_dir/lib-airboss.sh" "$HOME/.local/bin/lib-airboss.sh"; do
+  [ -r "$_c" ] && { . "$_c"; break; }
+done
+command -v ab_load_config >/dev/null 2>&1 && ab_load_config
 
-case "$(uname -s)" in
-Darwin)
-  sound=""
-  [ "$urgency" = critical ] && sound="Basso"
-  if command -v terminal-notifier >/dev/null 2>&1; then
-    set -- -title "$title" -message "$body" -group "airboss" -sender com.apple.Terminal
-    [ -n "$sound" ] && set -- "$@" -sound "$sound"
-    terminal-notifier "$@" >/dev/null 2>&1
-    exit 0
-  fi
-  # osascript: strings are AppleScript literals, escape backslashes and quotes
-  esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\r'; }
-  if [ -n "$sound" ]; then
-    osascript -e "display notification \"$(esc "$body")\" with title \"$(esc "$title")\" sound name \"$sound\"" >/dev/null 2>&1
-  else
-    osascript -e "display notification \"$(esc "$body")\" with title \"$(esc "$title")\"" >/dev/null 2>&1
-  fi
-  ;;
-*)
-  command -v notify-send >/dev/null 2>&1 || exit 0
-  case "$urgency" in
-    critical) notify-send -a airboss -u critical -i "$icon" "$title" "$body" ;;
-    low)      notify-send -a airboss -u low -t 5000 -i "$icon" "$title" "$body" ;;
-    *)        notify-send -a airboss -u normal -t 8000 -i "$icon" "$title" "$body" ;;
+urgency="${1:-normal}"; icon="${2:-utilities-terminal}"; title="${3:-airboss}"; body="${4:-}"
+sinks="${AIRBOSS_NOTIFY_SINKS:-desktop}"
+
+# ── desktop ─────────────────────────────────────────────────────────────────
+sink_desktop() {
+  case "$(uname -s)" in
+  Darwin)
+    sound=""
+    [ "$urgency" = critical ] && sound="Basso"
+    if command -v terminal-notifier >/dev/null 2>&1; then
+      set -- -title "$title" -message "$body" -group "airboss" -sender com.apple.Terminal
+      [ -n "$sound" ] && set -- "$@" -sound "$sound"
+      terminal-notifier "$@" >/dev/null 2>&1
+      return 0
+    fi
+    # osascript: strings are AppleScript literals, escape backslashes and quotes
+    esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\r'; }
+    if [ -n "$sound" ]; then
+      osascript -e "display notification \"$(esc "$body")\" with title \"$(esc "$title")\" sound name \"$sound\"" >/dev/null 2>&1
+    else
+      osascript -e "display notification \"$(esc "$body")\" with title \"$(esc "$title")\"" >/dev/null 2>&1
+    fi
+    ;;
+  *)
+    command -v notify-send >/dev/null 2>&1 || return 0
+    case "$urgency" in
+      critical) notify-send -a airboss -u critical -i "$icon" "$title" "$body" ;;
+      low)      notify-send -a airboss -u low -t 5000 -i "$icon" "$title" "$body" ;;
+      *)        notify-send -a airboss -u normal -t 8000 -i "$icon" "$title" "$body" ;;
+    esac
+    ;;
   esac
-  ;;
-esac
+  return 0
+}
+
+# ── ntfy: the phone sink ────────────────────────────────────────────────────
+sink_ntfy() {
+  [ -n "${AIRBOSS_NTFY_TOPIC:-}" ] || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  local url prio
+  url="${AIRBOSS_NTFY_URL:-https://ntfy.sh}/$AIRBOSS_NTFY_TOPIC"
+  case "$urgency" in critical) prio=high ;; low) prio=low ;; *) prio=default ;; esac
+  set -- -fsS -m 10 -o /dev/null \
+    -H "Title: $title" -H "Priority: $prio" -H "Tags: robot"
+  [ -n "${AIRBOSS_NTFY_TOKEN:-}" ] && set -- "$@" -H "Authorization: Bearer $AIRBOSS_NTFY_TOKEN"
+  curl "$@" -d "$body" "$url" >/dev/null 2>&1
+  return 0
+}
+
+# ── telegram ────────────────────────────────────────────────────────────────
+sink_telegram() {
+  [ -n "${AIRBOSS_TELEGRAM_TOKEN:-}" ] && [ -n "${AIRBOSS_TELEGRAM_CHAT_ID:-}" ] || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  curl -fsS -m 10 -o /dev/null -X POST \
+    "https://api.telegram.org/bot$AIRBOSS_TELEGRAM_TOKEN/sendMessage" \
+    --data-urlencode "chat_id=$AIRBOSS_TELEGRAM_CHAT_ID" \
+    --data-urlencode "text=$title
+$body" >/dev/null 2>&1
+  return 0
+}
+
+# ── your own command ────────────────────────────────────────────────────────
+sink_command() {
+  [ -n "${AIRBOSS_NOTIFY_COMMAND:-}" ] || return 0
+  # shellcheck disable=SC2086
+  $AIRBOSS_NOTIFY_COMMAND "$urgency" "$icon" "$title" "$body" >/dev/null 2>&1
+  return 0
+}
+
+for sink in $sinks; do
+  case "$sink" in
+    desktop)  sink_desktop ;;
+    ntfy)     sink_ntfy & ;;
+    telegram) sink_telegram & ;;
+    command)  sink_command & ;;
+  esac
+done
+# No wait: the network sinks are detached on purpose, so a slow ntfy or Telegram
+# never delays the hook that fired this. curl's -m caps them at 10 s anyway.
 exit 0

@@ -198,6 +198,63 @@ ab_tty_of_pid() { # /dev/ttys003 style, empty when not on a tty
 }
 
 # ── desktop notifications ───────────────────────────────────────────────────
+# ab_load_config — the resolved ~/.config/airboss/config.toml as environment
+# variables, via `airboss-tui config`, so the shell side never parses TOML and
+# config.toml stays the single source of truth. Runs once per process; if the
+# binary is missing the built-in defaults below stand.
+ab_load_config() {
+  [ -n "${AIRBOSS_CONFIG_LOADED:-}" ] && return 0
+  AIRBOSS_CONFIG_LOADED=1
+  local bin out
+  bin="${AIRBOSS_TUI_BIN:-$HOME/.local/bin/airboss-tui}"
+  if [ -x "$bin" ] && out=$("$bin" config 2>/dev/null) && [ -n "$out" ]; then
+    eval "$out"
+  fi
+  : "${AIRBOSS_NOTIFY_ENABLED:=1}"
+  : "${AIRBOSS_NOTIFY_SINKS:=desktop}"
+  : "${AIRBOSS_NOTIFY_WAITING:=1}"
+  : "${AIRBOSS_NOTIFY_ERROR:=1}"
+  : "${AIRBOSS_NOTIFY_TURN_DONE:=1}"
+  : "${AIRBOSS_NOTIFY_SESSION_DONE:=1}"
+  : "${AIRBOSS_FEATURE_CLASSIFIER:=1}"
+  : "${AIRBOSS_FEATURE_WINDOW_FOCUS:=1}"
+  : "${AIRBOSS_FEATURE_APPLY_TITLE:=1}"
+  : "${AIRBOSS_FEATURE_SYNC:=1}"
+  return 0
+}
+
+# ab_feature <name> — true when [features].<name> is on. Names are the config
+# keys: classifier, window_focus, apply_title, sync.
+ab_feature() {
+  ab_load_config
+  local v
+  case "$1" in
+    classifier)   v="$AIRBOSS_FEATURE_CLASSIFIER" ;;
+    window_focus) v="$AIRBOSS_FEATURE_WINDOW_FOCUS" ;;
+    apply_title)  v="$AIRBOSS_FEATURE_APPLY_TITLE" ;;
+    sync)         v="$AIRBOSS_FEATURE_SYNC" ;;
+    *)            v=1 ;;
+  esac
+  [ "$v" = 1 ]
+}
+
+# ab_notify_event <event: waiting|error|turn_done|session_done> <urgency> <icon> <title> <body>
+# Drops the notification when [notify.events].<event> is off.
+ab_notify_event() {
+  ab_load_config
+  local ev="$1" on
+  case "$ev" in
+    waiting)      on="$AIRBOSS_NOTIFY_WAITING" ;;
+    error)        on="$AIRBOSS_NOTIFY_ERROR" ;;
+    turn_done)    on="$AIRBOSS_NOTIFY_TURN_DONE" ;;
+    session_done) on="$AIRBOSS_NOTIFY_SESSION_DONE" ;;
+    *)            on=1 ;;
+  esac
+  [ "$on" = 1 ] || return 0
+  shift
+  ab_notify "$@"
+}
+
 # ab_notify <urgency: low|normal|critical> <icon> <title> <body>
 ab_notify() {
   local urgency="$1" icon="$2" title="$3" body="$4"
@@ -205,7 +262,11 @@ ab_notify() {
   return 0
 }
 
+# True when notifications are enabled and at least one sink is usable.
 ab_can_notify() {
+  ab_load_config
+  [ "$AIRBOSS_NOTIFY_ENABLED" = 1 ] || return 1
+  [ -n "$AIRBOSS_NOTIFY_SINKS" ] || return 1
   [ -x "${AIRBOSS_NOTIFY_BIN:-$HOME/.local/bin/airboss-notify}" ] && return 0
   command -v notify-send >/dev/null 2>&1
 }

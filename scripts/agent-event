@@ -9,8 +9,11 @@
 #   agent-event codex-notify ...     JSON as the last argument (legacy Codex notify)
 #   agent-event apply-title <file>   applies the state's title to Claude (session + transcript)
 #
+# Which transitions notify, where they go and which parts of airboss run at all
+# come from [notify] and [features] in ~/.config/airboss/config.toml.
+#
 # Variables: AGENT_BOARD_DIR (state), AGENT_BOARD_QUIET=1 (no notifications),
-#            AGENT_BOARD_NOTIFY_STOP=0 (don't notify when each turn ends),
+#            AGENT_BOARD_NOTIFY_STOP=0 (legacy: same as notify.events.turn_done=false),
 #            AGENT_BOARD_INTERNAL=1 (internal session, e.g. the classifier: ignore).
 set -u
 _ab_dir="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
@@ -37,6 +40,7 @@ fi
 
 # ── apply title to Claude: session file (claude agents) + transcript (/resume) ─
 apply_title() {
+  ab_feature apply_title || return 0
   local f="$1" sid title tp sfile cur last
   sid=$(jq -r '.session_id // empty' "$f"); title=$(jq -r '.title // empty' "$f"); tp=$(jq -r '.transcript_path // empty' "$f")
   [[ -z "$sid" || -z "$title" ]] && return 0
@@ -104,7 +108,7 @@ if [[ "$AGENT" == "bootstrap" ]]; then
      "$f" > "$f.tmp" && mv "$f.tmp" "$f"
   ab_unlock "$f"
   [[ -n "$title" ]] && apply_title "$f"
-  (( spawn )) && ab_spawn "$HOME/.local/bin/agent-title" "$f"
+  (( spawn )) && ab_feature classifier && ab_spawn "$HOME/.local/bin/agent-title" "$f"
   exit 0
 fi
 [[ "${AGENT_BOARD_INTERNAL:-0}" == "1" ]] && exit 0   # internal session (classifier): no file
@@ -243,20 +247,22 @@ ab_unlock "$file"
 printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(ab_iso_date)" "$AGENT" "$project" "$event" "$state" "${title:-$name}" >> "$LOG"
 
 (( apply )) && apply_title "$file"
-(( spawn )) && ab_spawn "$HOME/.local/bin/agent-title" "$file"
+(( spawn )) && ab_feature classifier && ab_spawn "$HOME/.local/bin/agent-title" "$file"
 
 # ── notifications on transitions ────────────────────────────────────────────
 [[ "${AGENT_BOARD_QUIET:-0}" == "1" ]] && exit 0
 ab_can_notify || exit 0
+# legacy escape hatch, kept working: it overrides notify.events.turn_done
+[[ "${AGENT_BOARD_NOTIFY_STOP:-1}" == "0" ]] && AIRBOSS_NOTIFY_TURN_DONE=0
 label="$(ab_ucfirst "$AGENT") · ${title:-${name:-$project}}"
 icon="utilities-terminal"
 if [[ "$state" == "waiting" && "$prev" != "waiting" ]]; then
-  ab_notify critical dialog-question "$label" "$MSG_WAITING ${waiting_for}"
+  ab_notify_event waiting critical dialog-question "$label" "$MSG_WAITING ${waiting_for}"
 elif [[ "$state" == "error" && "$prev" != "error" ]]; then
-  ab_notify critical dialog-error "$label" "$MSG_ERROR${waiting_for#error: }"
-elif [[ "$state" == "idle" && "$prev" == "working" && "${AGENT_BOARD_NOTIFY_STOP:-1}" == "1" ]]; then
-  ab_notify normal "$icon" "$label · $MSG_DONE_SUFFIX" "$(trunc "${last:-$MSG_TURN_DONE}" 160)"
+  ab_notify_event error critical dialog-error "$label" "$MSG_ERROR${waiting_for#error: }"
+elif [[ "$state" == "idle" && "$prev" == "working" ]]; then
+  ab_notify_event turn_done normal "$icon" "$label · $MSG_DONE_SUFFIX" "$(trunc "${last:-$MSG_TURN_DONE}" 160)"
 elif [[ "$state" == "done" && "$prev" != "done" ]]; then
-  ab_notify low "$icon" "$label" "$MSG_SESSION_CLOSED"
+  ab_notify_event session_done low "$icon" "$label" "$MSG_SESSION_CLOSED"
 fi
 exit 0

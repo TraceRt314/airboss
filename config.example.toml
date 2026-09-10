@@ -20,7 +20,7 @@ set = "nerd"               # nerd (Nerd Font v3) | unicode | ascii
 
 [ui]
 title = "AIRBOSS"
-lang = "es"                # es | en (default: from $LANG)
+lang = "en"                # es | en (default: from $LANG)
 show_goal = true           # second line per session with the goal and the window
 details = true             # detail box under the list
 detail_lines = 5
@@ -29,6 +29,42 @@ tick_seconds = 2           # how often cards are re-read
 name_width = 44
 spinner = "braille"        # braille | dots | line | none
 # state_dir = "~/.local/state/agent-board"
+
+# ── notifications ──────────────────────────────────────────────────────────
+[notify]
+enabled = true
+sinks = ["desktop"]        # desktop | ntfy | telegram | command — combine freely,
+                           #   e.g. ["desktop", "ntfy"] for desk and phone at once
+
+[notify.events]            # which transitions are worth interrupting you for
+waiting = true             # the agent needs an answer: permission, question, or
+                           #   a turn that ended and nobody came back
+error = true               # the agent errored
+turn_done = true           # a turn ended and the session went idle
+session_done = false       # the session closed
+
+# Phone alerts. Subscribe to the same topic in the ntfy app (Android / iOS) and
+# a waiting agent reaches you anywhere. Pick a topic nobody else will guess:
+# on the public server, the topic name is the only secret.
+# [notify.ntfy]
+# url = "https://ntfy.sh"          # or your own server
+# topic = "airboss-7f3a1c"
+# token = "env:NTFY_TOKEN"         # literal, env:VAR or file:~/.config/airboss/ntfy.token
+
+# [notify.telegram]
+# token = "file:~/.config/airboss/telegram.token"
+# chat_id = "123456789"
+
+# Anything else: called as <command> <urgency> <icon> <title> <body>.
+# command = "~/.local/bin/my-pager"
+
+# ── features ───────────────────────────────────────────────────────────────
+# Turn whole parts off. Everything is on by default.
+[features]
+classifier = true          # name untitled sessions with a small model in the background
+window_focus = true        # resolve terminal windows and raise them with ↵
+apply_title = true         # push the canonical title back into the CLI's session list
+sync = true                # the 5 s reconcile pass (without it, hooks are the only source)
 
 # Per task type: icon, color (palette key or hex), label
 [types.impl]
