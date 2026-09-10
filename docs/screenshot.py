@@ -1,14 +1,32 @@
 #!/usr/bin/env python3
 """Render airboss in a hidden tmux and export the screen as SVG (docs/screenshot.svg).
 Usage: docs/screenshot.py out.svg [cols rows [airboss-tui flags...]]"""
-import re, subprocess, sys, time, html, os
+import re, subprocess, sys, time, html, os, json, glob, shutil, tempfile
 out = sys.argv[1] if len(sys.argv) > 1 else "docs/screenshot.svg"
-cols, rows = (int(sys.argv[2]), int(sys.argv[3])) if len(sys.argv) > 3 else (132, 30)
-extra = sys.argv[4:]  # flags for airboss-tui, e.g. -lang en -theme nord
+cols, rows = (int(sys.argv[2]), int(sys.argv[3])) if len(sys.argv) > 3 else (150, 29)
+extra = sys.argv[4:] or ["-lang", "en"]  # flags for airboss-tui, e.g. -lang en -theme nord
 tui = os.path.expanduser("~/.local/bin/airboss-tui")
 here = os.path.dirname(os.path.abspath(__file__))
-# fictional sessions from docs/demo so the screenshot never leaks real prompts
-env = dict(os.environ, AGENT_BOARD_DIR=os.path.join(here, "demo"), AIRBOSS_NO_SYNC="1")
+
+# fictional sessions from docs/demo so the screenshot never leaks real prompts.
+# Their timestamps are fixed, which would render as "3d" a week after they were
+# written, so they are re-based onto now in a throwaway copy: the ages on the
+# cards stay the hours and minutes the demo was designed around.
+def stage_sessions():
+    src = sorted(glob.glob(os.path.join(here, "demo", "sessions", "*.json")))
+    cards = [json.load(open(f)) for f in src]
+    latest = max(c["updated"] for c in cards)
+    now = int(time.time())
+    tmp = tempfile.mkdtemp(prefix="airboss-shot-")
+    os.makedirs(os.path.join(tmp, "sessions"))
+    for f, c in zip(src, cards):
+        for k in ("started", "updated"):
+            c[k] = now - (latest - c[k]) - 150
+        json.dump(c, open(os.path.join(tmp, "sessions", os.path.basename(f)), "w"))
+    return tmp
+
+state = stage_sessions()
+env = dict(os.environ, AGENT_BOARD_DIR=state, AIRBOSS_NO_SYNC="1")
 subprocess.run(["tmux", "kill-session", "-t", "airboss-shot"], stderr=subprocess.DEVNULL)
 subprocess.run(["tmux", "new-session", "-d", "-s", "airboss-shot", "-x", str(cols), "-y", str(rows), " ".join([tui] + extra)], check=True, env=env)
 time.sleep(8)
@@ -53,5 +71,6 @@ for y, line in enumerate(raw.split("\n")[:rows]):
         svg.append(f'<text x="{PAD + x*CW:.1f}" y="{PAD + y*CH + 14}" fill="{f}"{weight} xml:space="preserve">{html.escape(text)}</text>')
         x += n
 svg.append("</svg>")
+shutil.rmtree(state, ignore_errors=True)
 open(out, "w").write("\n".join(svg))
 print(out, w, h)
