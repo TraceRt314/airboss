@@ -51,9 +51,20 @@ if [ "$OS" = Darwin ]; then
   CLAUDE_DIR="$(command -v claude >/dev/null && dirname "$(command -v claude)" || true)"
   [ -n "${CLAUDE_DIR:-}" ] && LPATH="$CLAUDE_DIR:$LPATH"
   sed -e "s|__HOME__|$HOME|g" -e "s|__PATH__|$LPATH|g" "$HERE/launchd/com.airboss.sync.plist" > "$PLIST"
-  launchctl bootout "gui/$(id -u)/com.airboss.sync" >/dev/null 2>&1 || true
-  launchctl bootstrap "gui/$(id -u)" "$PLIST"
-  launchctl kickstart "gui/$(id -u)/com.airboss.sync" >/dev/null 2>&1 || true
+  DOMAIN="gui/$(id -u)"
+  # bootout is asynchronous: bootstrapping again before the old job is gone
+  # fails with "Input/output error", so wait for it to disappear first.
+  launchctl bootout "$DOMAIN/com.airboss.sync" >/dev/null 2>&1 || true
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    launchctl print "$DOMAIN/com.airboss.sync" >/dev/null 2>&1 || break
+    sleep 0.5
+  done
+  if launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null; then
+    launchctl kickstart "$DOMAIN/com.airboss.sync" >/dev/null 2>&1 || true
+  else
+    warn "launchctl bootstrap failed; the previous agent is still loaded. Run:"
+    warn "  launchctl bootout $DOMAIN/com.airboss.sync && launchctl bootstrap $DOMAIN $PLIST"
+  fi
 elif command -v systemctl >/dev/null && [ -d /run/systemd/system ]; then
   say "installing systemd user timer (agent-board-sync every 5 s)"
   mkdir -p "$HOME/.config/systemd/user"
