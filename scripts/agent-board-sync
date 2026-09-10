@@ -13,6 +13,18 @@ for _c in "$_ab_dir/lib-airboss.sh" "$HOME/.local/bin/lib-airboss.sh"; do
 done
 command -v ab_lock >/dev/null 2>&1 || { echo "airboss: lib-airboss.sh not found" >&2; exit 1; }
 ab_setlocale
+# --loop [seconds]: reconcile forever instead of once. launchd refuses to respawn
+# a job more than once every 10 s, so a 5 s StartInterval silently becomes 10 s;
+# one long-lived process that sleeps between passes is the way to get the real
+# cadence there. systemd's timer has no such floor and calls the script directly.
+if [[ "${1:-}" == "--loop" ]]; then
+  interval="${2:-5}"
+  while :; do
+    "$0" || true
+    sleep "$interval"
+  done
+fi
+
 STATE_DIR="${AGENT_BOARD_DIR:-$HOME/.local/state/agent-board}"
 SESS_DIR="$STATE_DIR/sessions"
 mkdir -p "$SESS_DIR"

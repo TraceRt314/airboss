@@ -48,7 +48,7 @@ Everything works except what the platform does not have: there is no compositor,
 
 | | Linux | macOS |
 |---|---|---|
-| periodic sync | systemd user timer | launchd agent `com.airboss.sync` |
+| periodic sync | systemd user timer | launchd agent `com.airboss.sync`, running `agent-board-sync --loop 5` (launchd will not respawn a job more often than every 10 s, so one long-lived process is what gets the real 5 s cadence) |
 | notifications | `notify-send` | `terminal-notifier`, else `osascript` |
 | jump to the tab | Hyprland / Sway, by pid ancestry | iTerm2 / Terminal.app, by tty |
 | other terminals | any Wayland client | Ghostty, kitty, WezTerm, Alacritty, Warp: raised as an app, no per-tab jump (they do not script their tabs) |
