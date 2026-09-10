@@ -42,8 +42,15 @@ ab_ucfirst() {
 AB_LOCK_STALE="${AB_LOCK_STALE:-60}"
 
 ab_lock_break_stale() {
-  local d="$1.lockd" age
+  local d="$1.lockd" age owner
   [ -d "$d" ] || return 0
+  # the holder recorded its pid: if that process is gone the lock is orphaned
+  # (a killed hook, a restarted service) and there is no reason to wait it out
+  owner=$(cat "$d/pid" 2>/dev/null)
+  if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
+    rm -rf "$d"
+    return 0
+  fi
   age=$(( $(ab_now) - $(ab_stat_mtime "$d") ))
   [ "$age" -gt "$AB_LOCK_STALE" ] && rm -rf "$d"
   return 0
@@ -55,6 +62,9 @@ ab_trylock() {
   printf '%s' "$$" > "$1.lockd/pid" 2>/dev/null
   return 0
 }
+
+# ab_lock_owner <path> → pid holding the lock, empty if free
+ab_lock_owner() { cat "$1.lockd/pid" 2>/dev/null; }
 
 ab_lock() {
   local f="$1" timeout="${2:-5}" i=0 steps
