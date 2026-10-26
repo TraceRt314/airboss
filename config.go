@@ -54,6 +54,16 @@ type NotifyConfig struct {
 	Ntfy     NtfyConfig     `toml:"ntfy"`
 	Telegram TelegramConfig `toml:"telegram"`
 	Command  string         `toml:"command"` // run with <urgency> <icon> <title> <body>
+	Sounds   NotifySounds   `toml:"sounds"`
+}
+
+// NotifySounds: macOS sound per event, a name from /System/Library/Sounds or
+// ~/Library/Sounds, or "none".
+type NotifySounds struct {
+	Waiting     string `toml:"waiting"`
+	Error       string `toml:"error"`
+	TurnDone    string `toml:"turn_done"`
+	SessionDone string `toml:"session_done"`
 }
 
 type NotifyEvents struct {
@@ -116,6 +126,7 @@ func defaultConfig() Config {
 			Sinks:   []string{"desktop"},
 			Events:  NotifyEvents{Waiting: true, Error: true, TurnDone: true, SessionDone: true},
 			Ntfy:    NtfyConfig{URL: "https://ntfy.sh"},
+			Sounds:  NotifySounds{Waiting: "Glass", Error: "Basso", TurnDone: "Pop", SessionDone: "none"},
 		},
 		Features: FeaturesConfig{Classifier: true, WindowFocus: true, ApplyTitle: true, Sync: true},
 	}
@@ -236,6 +247,10 @@ func printShellConfig(cfg *Config) {
 	kv("AIRBOSS_TELEGRAM_TOKEN", resolveSecret(cfg.Notify.Telegram.Token))
 	kv("AIRBOSS_TELEGRAM_CHAT_ID", cfg.Notify.Telegram.ChatID)
 	kv("AIRBOSS_NOTIFY_COMMAND", expandHome(cfg.Notify.Command))
+	kv("AIRBOSS_SOUND_WAITING", cfg.Notify.Sounds.Waiting)
+	kv("AIRBOSS_SOUND_ERROR", cfg.Notify.Sounds.Error)
+	kv("AIRBOSS_SOUND_TURN_DONE", cfg.Notify.Sounds.TurnDone)
+	kv("AIRBOSS_SOUND_SESSION_DONE", cfg.Notify.Sounds.SessionDone)
 	kv("AIRBOSS_FEATURE_CLASSIFIER", boolVal(cfg.Features.Classifier))
 	kv("AIRBOSS_FEATURE_WINDOW_FOCUS", boolVal(cfg.Features.WindowFocus))
 	kv("AIRBOSS_FEATURE_APPLY_TITLE", boolVal(cfg.Features.ApplyTitle))

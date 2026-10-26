@@ -254,15 +254,22 @@ printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(ab_iso_date)" "$AGENT" "$project" "$event" 
 ab_can_notify || exit 0
 # legacy escape hatch, kept working: it overrides notify.events.turn_done
 [[ "${AGENT_BOARD_NOTIFY_STOP:-1}" == "0" ]] && AIRBOSS_NOTIFY_TURN_DONE=0
-label="$(ab_ucfirst "$AGENT") · ${title:-${name:-$project}}"
+# subtitle "Claude · project/type", title the description: the card reads
+# "Claude · project/type: description" on the sinks that have no subtitle
+head="$(ab_ucfirst "$AGENT")"; desc="${title:-${name:-$project}}"
+if [[ "$desc" =~ $FMT ]]; then head="$head · ${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"; desc="${BASH_REMATCH[3]}"
+else head="$head · $project"; fi
 icon="utilities-terminal"
 if [[ "$state" == "waiting" && "$prev" != "waiting" ]]; then
-  ab_notify_event waiting critical dialog-question "$label" "$MSG_WAITING ${waiting_for}"
+  ab_notify_event waiting critical dialog-question "$desc" "$MSG_WAITING ${waiting_for}" "$head" "$file" "$PPID"
 elif [[ "$state" == "error" && "$prev" != "error" ]]; then
-  ab_notify_event error critical dialog-error "$label" "$MSG_ERROR${waiting_for#error: }"
+  ab_notify_event error critical dialog-error "$desc" "$MSG_ERROR${waiting_for#error: }" "$head" "$file" "$PPID"
 elif [[ "$state" == "idle" && "$prev" == "working" ]]; then
-  ab_notify_event turn_done normal "$icon" "$label · $MSG_DONE_SUFFIX" "$(trunc "${last:-$MSG_TURN_DONE}" 160)"
+  ab_notify_event turn_done normal "$icon" "$desc · $MSG_DONE_SUFFIX" "$(trunc "${last:-$MSG_TURN_DONE}" 160)" "$head" "$file" "$PPID"
 elif [[ "$state" == "done" && "$prev" != "done" ]]; then
-  ab_notify_event session_done low "$icon" "$label" "$MSG_SESSION_CLOSED"
+  ab_notify_event session_done low "$icon" "$desc" "$MSG_SESSION_CLOSED" "$head" "$file" "$PPID"
+elif [[ "$state" == "working" && "$prev" != "working" ]]; then
+  # back at work: the session's last card is stale
+  "${AIRBOSS_NOTIFY_BIN:-$HOME/.local/bin/airboss-notify}" --remove "$file" 2>/dev/null
 fi
 exit 0

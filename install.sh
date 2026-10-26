@@ -18,7 +18,7 @@ for dep in jq go; do
 done
 if [ "$OS" = Darwin ]; then
   command -v tmux >/dev/null || warn "optional: tmux not found"
-  command -v terminal-notifier >/dev/null || warn "optional: terminal-notifier not found (falling back to osascript notifications)"
+  command -v swiftc >/dev/null || warn "optional: swiftc not found (xcode-select --install): no native notifications, falling back to terminal-notifier/osascript"
 else
   for dep in tmux notify-send hyprctl swaymsg; do
     command -v "$dep" >/dev/null || warn "optional: $dep not found"
@@ -36,6 +36,13 @@ for s in $SCRIPTS; do
   chmod +x "$HERE/scripts/$s"
   ln -sfn "$HERE/scripts/$s" "$BIN/$s"
 done
+
+if [ "$OS" = Darwin ] && command -v swiftc >/dev/null; then
+  say "building Airboss.app (native notifications) into ~/Applications"
+  mkdir -p "$HOME/Applications"
+  "$HERE/macos/build-notifier.sh" "$HOME/Applications" >/dev/null ||
+    warn "Airboss.app did not build: notifications fall back to terminal-notifier/osascript"
+fi
 
 mkdir -p "$HOME/.local/state/agent-board/sessions" "$HOME/.config/airboss"
 [ -f "$HOME/.config/airboss/config.toml" ] || cp "$HERE/config.example.toml" "$HOME/.config/airboss/config.toml"
