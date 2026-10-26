@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
-# airboss-notify <urgency> <icon> <title> <body>
+# airboss-notify <urgency> <icon> <title> <body> [subtitle] [session_file] [pid]
+# airboss-notify --remove <session_file>
 #   urgency: low | normal | critical      icon: a freedesktop icon name (Linux only)
+#   subtitle: "Agent · project/type"; session_file: the session's state card,
+#   used to group, replace and (on click) focus the session's terminal tab.
 #
 # Fans the notification out to every sink listed in [notify].sinks of
 # ~/.config/airboss/config.toml (default: desktop):
 #
-#   desktop   notify-send on Linux; terminal-notifier or osascript on macOS
+#   desktop   notify-send on Linux; on macOS Airboss.app (native: own icon,
+#             a sound per event from [notify.sounds], one card per session,
+#             click focuses the tab), else terminal-notifier, else osascript
 #   ntfy      an ntfy topic — this is what reaches your phone
 #   telegram  a Telegram bot message
-#   command   your own script, called with the same four arguments
+#   command   your own script, called with <urgency> <icon> <title> <body>
 #
 # Every sink is best-effort and runs in the background: a hook is never held up
 # by a slow network, and one broken sink does not stop the others.
@@ -18,18 +23,54 @@ for _c in "$_ab_dir/lib-airboss.sh" "$HOME/.local/bin/lib-airboss.sh"; do
   [ -r "$_c" ] && { . "$_c"; break; }
 done
 command -v ab_load_config >/dev/null 2>&1 && ab_load_config
+NOTIFIER="${AIRBOSS_NOTIFIER:-$HOME/Applications/Airboss.app/Contents/MacOS/airboss-notifier}"
+
+if [ "${1:-}" = "--remove" ]; then
+  [ "$(uname -s)" = Darwin ] && [ -x "$NOTIFIER" ] && [ -n "${2:-}" ] &&
+    "$NOTIFIER" -remove "airboss.$(basename "$2" .json)" >/dev/null 2>&1
+  exit 0
+fi
 
 urgency="${1:-normal}"; icon="${2:-utilities-terminal}"; title="${3:-airboss}"; body="${4:-}"
+subtitle="${5:-}"; session="${6:-}"; pid="${7:-}"
 sinks="${AIRBOSS_NOTIFY_SINKS:-desktop}"
+# one-line title for the sinks that have no subtitle
+full="$title"; [ -n "$subtitle" ] && full="$subtitle: $title"
+
+# ── macOS native: Airboss.app ───────────────────────────────────────────────
+# Returns non-zero when the app is missing or not allowed to notify, so the
+# caller falls back to terminal-notifier / osascript.
+native_macos() {
+  [ -x "$NOTIFIER" ] || return 1
+  local level=active n
+  [ "$urgency" = low ] && level=passive
+  "$NOTIFIER" -title "$title" -subtitle "$subtitle" -message "$body" -sound "${sound:-none}" \
+    -level "$level" -id "airboss.$(basename "${session:-misc}" .json)" \
+    -session "$session" -pid "$pid" >/dev/null 2>&1 &
+  n=$!
+  # it waits on Notification Center: never let a hook hang on it
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    kill -0 "$n" 2>/dev/null || break
+    sleep 0.25
+  done
+  if kill -0 "$n" 2>/dev/null; then kill "$n" 2>/dev/null; return 0; fi
+  wait "$n"
+}
 
 # ── desktop ─────────────────────────────────────────────────────────────────
 sink_desktop() {
   case "$(uname -s)" in
   Darwin)
-    sound=""
-    [ "$urgency" = critical ] && sound="Basso"
+    case "${AIRBOSS_EVENT:-$urgency}" in
+      waiting|critical) sound="${AIRBOSS_SOUND_WAITING:-Glass}" ;;
+      error)            sound="${AIRBOSS_SOUND_ERROR:-Basso}" ;;
+      session_done|low) sound="${AIRBOSS_SOUND_SESSION_DONE:-none}" ;;
+      *)                sound="${AIRBOSS_SOUND_TURN_DONE:-Pop}" ;;
+    esac
+    native_macos && return 0
+    [ "$sound" = none ] && sound=""
     if command -v terminal-notifier >/dev/null 2>&1; then
-      set -- -title "$title" -message "$body" -group "airboss" -sender com.apple.Terminal
+      set -- -title "$full" -message "$body" -group "airboss" -sender com.apple.Terminal
       [ -n "$sound" ] && set -- "$@" -sound "$sound"
       terminal-notifier "$@" >/dev/null 2>&1
       return 0
@@ -37,17 +78,17 @@ sink_desktop() {
     # osascript: strings are AppleScript literals, escape backslashes and quotes
     esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\r'; }
     if [ -n "$sound" ]; then
-      osascript -e "display notification \"$(esc "$body")\" with title \"$(esc "$title")\" sound name \"$sound\"" >/dev/null 2>&1
+      osascript -e "display notification \"$(esc "$body")\" with title \"$(esc "$full")\" sound name \"$sound\"" >/dev/null 2>&1
     else
-      osascript -e "display notification \"$(esc "$body")\" with title \"$(esc "$title")\"" >/dev/null 2>&1
+      osascript -e "display notification \"$(esc "$body")\" with title \"$(esc "$full")\"" >/dev/null 2>&1
     fi
     ;;
   *)
     command -v notify-send >/dev/null 2>&1 || return 0
     case "$urgency" in
-      critical) notify-send -a airboss -u critical -i "$icon" "$title" "$body" ;;
-      low)      notify-send -a airboss -u low -t 5000 -i "$icon" "$title" "$body" ;;
-      *)        notify-send -a airboss -u normal -t 8000 -i "$icon" "$title" "$body" ;;
+      critical) notify-send -a airboss -u critical -i "$icon" "$full" "$body" ;;
+      low)      notify-send -a airboss -u low -t 5000 -i "$icon" "$full" "$body" ;;
+      *)        notify-send -a airboss -u normal -t 8000 -i "$icon" "$full" "$body" ;;
     esac
     ;;
   esac
@@ -62,7 +103,7 @@ sink_ntfy() {
   url="${AIRBOSS_NTFY_URL:-https://ntfy.sh}/$AIRBOSS_NTFY_TOPIC"
   case "$urgency" in critical) prio=high ;; low) prio=low ;; *) prio=default ;; esac
   set -- -fsS -m 10 -o /dev/null \
-    -H "Title: $title" -H "Priority: $prio" -H "Tags: robot"
+    -H "Title: $full" -H "Priority: $prio" -H "Tags: robot"
   [ -n "${AIRBOSS_NTFY_TOKEN:-}" ] && set -- "$@" -H "Authorization: Bearer $AIRBOSS_NTFY_TOKEN"
   curl "$@" -d "$body" "$url" >/dev/null 2>&1
   return 0
@@ -75,7 +116,7 @@ sink_telegram() {
   curl -fsS -m 10 -o /dev/null -X POST \
     "https://api.telegram.org/bot$AIRBOSS_TELEGRAM_TOKEN/sendMessage" \
     --data-urlencode "chat_id=$AIRBOSS_TELEGRAM_CHAT_ID" \
-    --data-urlencode "text=$title
+    --data-urlencode "text=$full
 $body" >/dev/null 2>&1
   return 0
 }
@@ -84,7 +125,7 @@ $body" >/dev/null 2>&1
 sink_command() {
   [ -n "${AIRBOSS_NOTIFY_COMMAND:-}" ] || return 0
   # shellcheck disable=SC2086
-  $AIRBOSS_NOTIFY_COMMAND "$urgency" "$icon" "$title" "$body" >/dev/null 2>&1
+  $AIRBOSS_NOTIFY_COMMAND "$urgency" "$icon" "$full" "$body" >/dev/null 2>&1
   return 0
 }
 

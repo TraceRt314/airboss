@@ -58,6 +58,15 @@ session_done = false       # the session closed
 # Anything else: called as <command> <urgency> <icon> <title> <body>.
 # command = "~/.local/bin/my-pager"
 
+# macOS desktop sound per event: a name from /System/Library/Sounds (Basso,
+# Blow, Bottle, Frog, Funk, Glass, Hero, Morse, Ping, Pop, Purr, Sosumi,
+# Submarine, Tink), a file you dropped in ~/Library/Sounds, or "none".
+[notify.sounds]
+waiting = "Glass"
+error = "Basso"
+turn_done = "Pop"
+session_done = "none"
+
 # ── features ───────────────────────────────────────────────────────────────
 # Turn whole parts off. Everything is on by default.
 [features]

@@ -238,7 +238,7 @@ ab_feature() {
   [ "$v" = 1 ]
 }
 
-# ab_notify_event <event: waiting|error|turn_done|session_done> <urgency> <icon> <title> <body>
+# ab_notify_event <event: waiting|error|turn_done|session_done> <urgency> <icon> <title> <body> [subtitle] [session_file] [pid]
 # Drops the notification when [notify.events].<event> is off.
 ab_notify_event() {
   ab_load_config
@@ -252,13 +252,12 @@ ab_notify_event() {
   esac
   [ "$on" = 1 ] || return 0
   shift
-  ab_notify "$@"
+  AIRBOSS_EVENT="$ev" ab_notify "$@"
 }
 
-# ab_notify <urgency: low|normal|critical> <icon> <title> <body>
+# ab_notify <urgency: low|normal|critical> <icon> <title> <body> [subtitle] [session_file] [pid]
 ab_notify() {
-  local urgency="$1" icon="$2" title="$3" body="$4"
-  "${AIRBOSS_NOTIFY_BIN:-$HOME/.local/bin/airboss-notify}" "$urgency" "$icon" "$title" "$body" 2>/dev/null
+  "${AIRBOSS_NOTIFY_BIN:-$HOME/.local/bin/airboss-notify}" "$@" 2>/dev/null
   return 0
 }
 

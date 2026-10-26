@@ -52,17 +52,13 @@ Everything works except what the platform does not have: there is no compositor,
 | | Linux | macOS |
 |---|---|---|
 | periodic sync | systemd user timer | launchd agent `com.airboss.sync`, running `agent-board-sync --loop 5` (launchd will not respawn a job more often than every 10 s, so one long-lived process is what gets the real 5 s cadence) |
-| desktop notifications | `notify-send` | `terminal-notifier`, else `osascript` |
+| desktop notifications | `notify-send` | `Airboss.app` (native, built by the installer), else `terminal-notifier`, else `osascript` |
 | jump to the tab | Hyprland / Sway, by pid ancestry | iTerm2 / Terminal.app, by tty |
 | other terminals | any Wayland client | Ghostty, kitty, WezTerm, Alacritty, Warp: raised as an app, no per-tab jump (they do not script their tabs) |
 
-Optional but recommended:
+Desktop notifications come from `~/Applications/Airboss.app`, a small Swift helper the installer compiles (it needs the Xcode command line tools: `xcode-select --install`). Each one carries the Airboss icon, the session's description as title and `Agent · project/type` as subtitle, and a sound per event (`[notify.sounds]`). Each session keeps at most one card: a newer event replaces the older one, and the card is withdrawn when you prompt the session again. Clicking it jumps to the session's iTerm2 / Terminal.app tab and tmux pane.
 
-```bash
-brew install terminal-notifier   # clickable, grouped notifications instead of osascript's
-```
-
-The first notification asks for permission — allow it for iTerm2 (or for `terminal-notifier`) in System Settings → Notifications, or nothing will ever show up.
+The first notification asks for permission; the first click asks to let Airboss control iTerm2 (that is how it selects the tab). Both live in System Settings → Notifications and → Privacy & Security → Automation. Without swiftc, notifications fall back to `terminal-notifier` if installed, else `osascript`.
 
 Bind it to a key in iTerm2: Settings → Keys → Key Bindings → `+`, action **Send Text**, `airboss\n`. Inside tmux, `airboss` opens in its own `airboss` window, so the binding works from any pane.
 
@@ -113,7 +109,7 @@ session_done = false          # the session closed
 
 | sink | goes to | needs |
 |---|---|---|
-| `desktop` | `notify-send`, or `terminal-notifier` / `osascript` on macOS | nothing |
+| `desktop` | `notify-send`, or `Airboss.app` on macOS | nothing |
 | `ntfy` | the [ntfy](https://ntfy.sh) app on your phone, or your own server | `[notify.ntfy].topic` |
 | `telegram` | a Telegram bot message | `[notify.telegram].token` and `chat_id` |
 | `command` | your own script | `[notify].command` |
@@ -133,7 +129,7 @@ chat_id = "123456789"
 
 Tokens can be the literal value, `env:VAR` or `file:/path`, so a `config.toml` that lives in a dotfiles repo never holds the secret itself.
 
-Anything else — a pager, a smart bulb, a webhook — is the `command` sink, called with the four arguments the notifier itself takes:
+Anything else — a pager, a smart bulb, a webhook — is the `command` sink, called with four arguments:
 
 ```toml
 [notify]
